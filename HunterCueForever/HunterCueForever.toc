@@ -3,9 +3,10 @@
 ## Notes: Beast Mastery, Marksmanship and Survival weaving cues for WoW Forever.
 ## Notes-zhCN: 兽王、射击、生存穿插循环提示。独立运行，无需 MaxDps。
 ## Author: ufolyx-niper
-## Version: 1.0.0
+## Version: 1.1.0
 ## SavedVariablesPerCharacter: HunterCueForeverDB
 Data.lua
 Engine.lua
 Adapter.lua
 UI.lua
+Options.lua

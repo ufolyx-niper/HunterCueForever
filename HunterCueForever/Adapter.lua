@@ -182,6 +182,7 @@ function ns.Snapshot()
     if ns.lastHawk and now-ns.lastHawk>18 then ns.hawkCount=0;ns.lastHawk=nil end
     local s={now=now,spells={},spec=ns.Profile(),mode=db.mode,targets=db.targets,
         cooldowns=db.cooldowns,traps=db.traps,weave=db.weave,hawkCount=ns.hawkCount or 0,readiness=false}
+    s.inCombat=ns.enteringCombat==true or Call(InCombatLockdown)==true
     s.target=Call(UnitExists,"target")==true and Call(UnitCanAttack,"player","target")==true
         and Call(UnitIsDeadOrGhost,"target")==false and Call(UnitIsPlayer,"target")==false
         and Call(UnitIsDeadOrGhost,"player")==false
@@ -232,11 +233,15 @@ end
 function ns.SavePosition(x,y)
     ns.db.x=x;ns.db.y=y
 end
+function ns.LayoutLockedByCombat() return ns.enteringCombat==true or Call(InCombatLockdown)~=false end
 local function Say(text) print("|cff75c9ffHunterCue:|r "..text) end
 function ns.Command(message)
     if not ns.db then Say("需要 Forever 客户端上的猎人角色。");return end
     local cmd,arg=message:lower():match("^%s*(%S*)%s*(.-)%s*$")
-    if cmd=="spec" and ns.specNames[arg] then ns.db.spec=arg;ns.ResetTracking()
+    if cmd=="" or cmd=="config" or cmd=="options" then
+        if ns.LayoutLockedByCombat() then Say("请脱战后打开设置。");return end
+        if ns.OpenOptions then ns.OpenOptions() end;return
+    elseif cmd=="spec" and ns.specNames[arg] then ns.db.spec=arg;ns.ResetTracking()
     elseif cmd=="mode" and ns.modeNames[arg] then ns.db.mode=arg
     elseif cmd=="targets" and (arg=="1" or arg=="3" or arg=="6") then ns.db.targets=tonumber(arg)
     elseif cmd=="weave" and (arg=="normal" or arg=="aggressive") then ns.db.weave=arg;ns.ResetTracking()
@@ -244,11 +249,17 @@ function ns.Command(message)
         ns.db[cmd=="burst" and "cooldowns" or "traps"]=arg=="on"
     elseif cmd=="show" then ns.db.enabled=true
     elseif cmd=="hide" then ns.db.enabled=false
-    elseif cmd=="lock" then ns.db.locked=not ns.db.locked
-    elseif cmd=="reset" then ns.db=ns.Settings({});HunterCueForeverDB=ns.db;ns.ResetTracking()
+    elseif cmd=="lock" then
+        if ns.LayoutLockedByCombat() then Say("请脱战后调整布局。");return end
+        ns.db.locked=not ns.db.locked
+    elseif cmd=="reset" then
+        if ns.LayoutLockedByCombat() then Say("请脱战后重置。");return end
+        ns.OpenOptions();ns.resetArmed=true;ns.RefreshOptions();return
+    elseif cmd=="scale" then
+        if not ns.SetOption("scale",tonumber(arg)) then Say("缩放范围为 0.6–2，需脱战调整。");return end
     elseif cmd=="pos" then
         local x,y=arg:match("^([+-]?%d+)%s+([+-]?%d+)$")
-        if x and y and math.abs(tonumber(x))<=4000 and math.abs(tonumber(y))<=4000 then ns.SavePosition(tonumber(x),tonumber(y)) end
+        if not ns.LayoutLockedByCombat() and x and y and math.abs(tonumber(x))<=4000 and math.abs(tonumber(y))<=4000 then ns.SavePosition(tonumber(x),tonumber(y)) end
     elseif cmd=="status" then
         local s=ns.Snapshot();local count=0;for _ in pairs(ns.known) do count=count+1 end
         Say(ns.version.." / "..s.spec.." / "..s.mode.." / 已学技能组 "..count)
@@ -258,11 +269,13 @@ function ns.Command(message)
         if #ns.missingEvents>0 then Say("未注册事件："..table.concat(ns.missingEvents,", ")) end
         return
     else
-        Say("/hcf spec auto|bm|mm|sv · mode balanced|conserve|burst · targets 1|3|6")
+        Say("/hcf 打开设置；/hcf spec auto|bm|mm|sv · mode balanced|conserve|burst · targets 1|3|6")
         Say("/hcf weave normal|aggressive · burst on|off · traps on|off · show|hide|lock|reset|status · pos x y")
+        Say("/hcf config 打开设置 · /hcf scale 0.6–2 调整大小 · /hcf help 查看命令")
         return
     end
     if ns.ApplyUI then ns.ApplyUI() end
+    if ns.RefreshOptions then ns.RefreshOptions() end
 end
 local events=CreateFrame("Frame")
 ns.events=events
@@ -272,7 +285,8 @@ local function Register(method,event,...)
     if not ok then ns.missingEvents[#ns.missingEvents+1]=event end
 end
 for _,event in ipairs({"PLAYER_LOGIN","PLAYER_ENTERING_WORLD","PLAYER_TARGET_CHANGED","PLAYER_DEAD",
-    "SPELLS_CHANGED","PLAYER_TALENT_UPDATE","CHARACTER_POINTS_CHANGED","PLAYER_REGEN_ENABLED","SPELL_UPDATE_COOLDOWN"}) do Register(events.RegisterEvent,event) end
+    "SPELLS_CHANGED","PLAYER_TALENT_UPDATE","CHARACTER_POINTS_CHANGED","PLAYER_REGEN_ENABLED","PLAYER_REGEN_DISABLED",
+    "UI_SCALE_CHANGED","DISPLAY_SIZE_CHANGED","SPELL_UPDATE_COOLDOWN"}) do Register(events.RegisterEvent,event) end
 Register(events.RegisterUnitEvent,"UNIT_SPELLCAST_SENT","player")
 Register(events.RegisterUnitEvent,"UNIT_SPELLCAST_SUCCEEDED","player")
 local function Event(_,event,...)
@@ -285,16 +299,26 @@ local function Event(_,event,...)
         if not ok or class~="HUNTER" or type(interface)~="number" or interface<16000 or interface>=20000 then return end
         ns.db=ns.Settings(HunterCueForeverDB);HunterCueForeverDB=ns.db;ns.ScanSpells()
         if ns.CreateUI then ns.CreateUI() end
+        if ns.InitOptions then ns.InitOptions() end
         return
     end
     if not ns.db then return end
-    if event=="UNIT_SPELLCAST_SENT" then ns.Sent(...)
+    if event=="PLAYER_REGEN_ENABLED" or event=="PLAYER_ENTERING_WORLD" then ns.enteringCombat=nil end
+    if event=="PLAYER_REGEN_DISABLED" then
+        ns.enteringCombat=true -- Lockdown can still be false inside this event callback.
+        if ns.EndPreview then ns.EndPreview() end
+        if ns.RefreshOptions then ns.RefreshOptions() end
+    elseif event=="UI_SCALE_CHANGED" or event=="DISPLAY_SIZE_CHANGED" then
+        if ns.ApplyUI then ns.ApplyUI() end
+        if ns.RefreshOptions then ns.RefreshOptions() end
+    elseif event=="UNIT_SPELLCAST_SENT" then ns.Sent(...)
     elseif event=="UNIT_SPELLCAST_SUCCEEDED" then ns.Succeeded(...)
     elseif event=="SPELL_UPDATE_COOLDOWN" then ns.CooldownEvent()
     elseif event=="PLAYER_TARGET_CHANGED" then ns.TargetChanged()
     elseif event=="PLAYER_DEAD" or event=="PLAYER_ENTERING_WORLD" then ns.ResetTracking()
     elseif event=="SPELLS_CHANGED" or event=="PLAYER_TALENT_UPDATE" or event=="CHARACTER_POINTS_CHANGED"
         or (event=="PLAYER_REGEN_ENABLED" and ns.scanPending) then ns.ScanSpells() end
+    if event=="PLAYER_REGEN_ENABLED" and ns.RefreshOptions then ns.RefreshOptions() end
 end
 events:SetScript("OnEvent",function(...)
     local ok=pcall(Event,...)
@@ -304,7 +328,11 @@ local elapsedTotal=0
 events:SetScript("OnUpdate",function(_,elapsed)
     if not ns.db then return end
     elapsedTotal=elapsedTotal+elapsed;if elapsedTotal<0.1 then return end;elapsedTotal=0
-    local ok=pcall(function() local s=ns.Snapshot();ns.UpdateUI(s,ns.Decide(s)) end)
+    local ok=pcall(function()
+        local locked=ns.LayoutLockedByCombat()
+        if locked~=ns.lastLayoutLock then ns.lastLayoutLock=locked;if ns.RefreshOptions then ns.RefreshOptions() end end
+        local s=ns.Snapshot();ns.UpdateUI(s,ns.Decide(s))
+    end)
     if not ok then ns.lastError=true;if ns.ShowError then ns.ShowError() end end
 end)
 SLASH_HUNTERCUEFOREVER1="/hcf"

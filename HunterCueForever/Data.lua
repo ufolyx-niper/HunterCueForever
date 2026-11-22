@@ -1,6 +1,6 @@
 -- SPDX-License-Identifier: MIT
 local _, ns = ...
-ns.version = "1.0.0"
+ns.version = "1.1.0"
 -- Rank order is explicit. Spell IDs are facts checked against WoWSims Forever
 -- 00fecd9c spell_data_auto_gen.go; never sort by ID or localized rank text.
 ns.spells = {
@@ -23,7 +23,10 @@ ns.family = {hawk={"hawk","arcane"}, arcane={"hawk","arcane"},
     aimed={"aimed","multi"}, multi={"aimed","multi"},
     immolation={"immolation","explosive"}, explosive={"immolation","explosive"}}
 ns.defaults = {spec="auto", mode="balanced", targets=1, cooldowns=true,
-    traps=false, weave="normal", enabled=true, locked=false, x=180, y=-130, scale=1}
+    traps=false, weave="normal", enabled=true, locked=false, x=180, y=-130, scale=1,
+    fontScale=1, opacity=0.92, visibility="always", layoutVersion=2}
+ns.optionBounds={scale={0.6,2},fontScale={0.9,1.25},opacity={0.2,1},x={-4000,4000},y={-4000,4000}}
+ns.layoutKeys={"x","y","scale","fontScale","opacity"}
 ns.specNames = {auto="自动", bm="兽王", mm="射击", sv="生存"}
 ns.modeNames = {balanced="均衡", conserve="省蓝", burst="全力"}
 function ns.Settings(raw)
@@ -36,11 +39,34 @@ function ns.Settings(raw)
     if not ns.modeNames[out.mode] then out.mode="balanced" end
     if out.targets~=1 and out.targets~=3 and out.targets~=6 then out.targets=1 end
     if out.weave~="normal" and out.weave~="aggressive" then out.weave="normal" end
-    for _,k in ipairs({"x","y","scale"}) do
+    for k,bounds in pairs(ns.optionBounds) do
         if out[k]~=out[k] or math.abs(out[k])>4000 then out[k]=ns.defaults[k] end
+        out[k]=math.max(bounds[1],math.min(bounds[2],out[k]))
     end
-    out.scale=math.max(0.6,math.min(2,out.scale))
+    if raw.layoutVersion~=2 then
+        out.x=math.max(-4000,math.min(4000,out.x*out.scale))
+        out.y=math.max(-4000,math.min(4000,out.y*out.scale))
+    end
+    out.layoutVersion=2
+    if out.visibility~="always" and out.visibility~="target" and out.visibility~="combat" then out.visibility="always" end
     return out
+end
+-- Coordinates are in UIParent units; root's anchor offset uses root units.
+function ns.LayoutGeometry(db,width,height)
+    local scale=math.min(db.scale,math.max(0.1,(width-24)/400),math.max(0.1,(height-24)/270))
+    local mx=math.max(0,(width-400*scale)/2-12)
+    local my=math.max(0,(height-270*scale)/2-12)
+    local x=math.max(-mx,math.min(mx,db.x));local y=math.max(-my,math.min(my,db.y))
+    return x,y,scale,x/scale,y/scale
+end
+function ns.CenterToParent(x,y,effectiveScale,parentScale,px,py)
+    return x*effectiveScale/parentScale-px,y*effectiveScale/parentScale-py
+end
+function ns.ShouldShow(db,state,preview)
+    if preview then return true end
+    if not db.enabled then return false end
+    return db.visibility=="always" or (db.visibility=="target" and state and state.target==true)
+        or (db.visibility=="combat" and state and state.inCombat==true) or false
 end
 function ns.SelectRank(ranks, learned)
     for i=#ranks,1,-1 do if learned[ranks[i]] then return ranks[i] end end

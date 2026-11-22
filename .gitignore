@@ -1,3 +1,11 @@
 dist/
 __pycache__/
 *.pyc
+AGENTS.md
+UI_PLAN.md
+PLAN.md
+api-evidence.txt
+package-manifest.json
+tests/
+tools/
+docs/research.md
