@@ -1,0 +1,9 @@
+API contracts, paraphrased from Blizzard generated documentation (2026-11-22).
+https://github.com/Gethe/wow-ui-source/blob/forever/Interface/AddOns/Blizzard_APIDocumentationGenerated/SpellSharedDocumentation.lua
+https://github.com/Gethe/wow-ui-source/blob/forever/Interface/AddOns/Blizzard_APIDocumentationGenerated/SpellDocumentation.lua
+SpellCooldownInfo.isEnabled/isActive are NeverSecret; startTime/duration are not.
+isOnGCD is NeverSecret but only trustworthy in SPELL_UPDATE_COOLDOWN context.
+GetSpellCooldownDuration accepts ignoreGCD and returns a duration object for native display.
+IsSpellUsable supplies usability and insufficient power; neither has a NeverSecret annotation: guard both.
+IsSpellInRange can return nil for invalid checks. UnitPower is secret when restricted.
+No live-client verification. This file is development evidence, excluded from ZIP.
