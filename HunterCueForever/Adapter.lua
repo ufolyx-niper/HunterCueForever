@@ -124,6 +124,39 @@ local function Availability(key,id,gcd,now)
     local future=gcd.active==true and remaining and gcdRemaining and remaining<=gcdRemaining+0.001
     return gcdOnly or future or false,remaining,oom,usable,gcdOnly
 end
+-- Burst reminders describe OWN cooldown readiness, not the next main action.
+-- A readable native ignore-GCD result outranks timing/cache heuristics.
+local function BurstAvailability(key,id,gcd,now,usable,oom)
+    if ns.fences[key] and now<ns.fences[key] then return false,"施放后同步" end
+    if type(usable)~="boolean" or type(oom)~="boolean" then return nil,"可用性或资源未知" end
+    if oom then return false,"资源不足" end
+    local cd=Cooldown(id)
+    if cd.enabled==false then return false,"技能未启用" end
+    if cd.enabled~=true then return nil,"冷却启用状态未知" end
+    local duration=SpellAPI("GetSpellCooldownDuration",id,true)
+    local clear=duration and Call(function() return duration:IsZero() end)
+    local source
+    if type(clear)=="boolean" then
+        source=clear and "原生：自身冷却就绪" or "原生：自身冷却中"
+    elseif cd.active==false then
+        clear=true;source="备用：无冷却"
+    elseif cd.active==true and gcd.active==true then
+        if cd.start and cd.duration and cd.rate and gcd.start and gcd.duration and gcd.rate then
+            clear=cd.start==gcd.start and cd.duration==gcd.duration and cd.rate==gcd.rate
+            source=clear and "备用：仅公共CD" or "备用：自身冷却中"
+        else
+            local cache=ns.cooldownCache[key]
+            clear=cache and cache.id==id and now-cache.stamp<=2 and cache.gcd==true or false
+            source=clear and "备用：公共CD事件" or "自身冷却无法确认"
+        end
+    else
+        clear=false;source="自身冷却未就绪或未知"
+    end
+    if not clear then return false,source end
+    if usable then return true,source end
+    if gcd.active==true then return true,source.." / 公共CD保留" end
+    return false,"非公共CD期间不可用"
+end
 local function Cost(id)
     local costs=SpellAPI("GetSpellPowerCost",id)
     if type(costs)~="table" then return nil end
@@ -254,8 +287,10 @@ function ns.Snapshot()
     s.gcd=gcd.active==true;s.gcdKnown=gcd.active~=nil;s.gcdStart=gcd.start;s.gcdRemaining=Remaining(gcd,now)
     for key,id in pairs(ns.known) do
         local ready,remaining,oom,usable,burstReady=Availability(key,id,gcd,now)
+        local burstReason
+        if ns.burstOption[key] then burstReady,burstReason=BurstAvailability(key,id,gcd,now,usable,oom) end
         local range=SpellAPI("IsSpellInRange",id,"target")
-        s.spells[key]={id=id,ready=ready,remaining=remaining,oom=oom,range=range,usable=usable,burstReady=burstReady,
+        s.spells[key]={id=id,ready=ready,remaining=remaining,oom=oom,range=range,usable=usable,burstReady=burstReady,burstReason=burstReason,
             queued=Call(IsCurrentSpell,id),cost=Cost(id)}
         if key~="auto" and ready~=nil then s.readiness=true end
     end
@@ -330,6 +365,11 @@ function ns.Command(message)
         Say("蓝量:"..(s.mana and "可读" or "受限").." 回蓝:"..(s.regen and "可读" or "受限")
             .." 技能状态:"..(s.readiness and "可读" or "不可读").." 射程:"..(s.ranged==nil and "未知" or "可读")
             .." 钉刺:"..(s.sting==nil and "未知" or s.stingEstimated and "估算" or "可读"))
+        for _,key in ipairs(ns.burstOrder) do
+            local p=s.spells[key]
+            if p then Say(ns.SpellName(key).."："..(p.burstReason or "未知")
+                ..(key=="wrath" and not s.pet and " / 无存活宠物" or "")) end
+        end
         if #ns.missingEvents>0 then Say("未注册事件："..table.concat(ns.missingEvents,", ")) end
         if ns.lastError then Say("最近一次状态/界面更新失败；请 /reload 后再次检查。");end
         return

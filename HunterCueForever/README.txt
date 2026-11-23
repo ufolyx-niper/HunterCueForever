@@ -1,4 +1,4 @@
-HunterCue Forever 1.4.0
+HunterCue Forever 1.4.1
 独立支持兽王、射击、生存weaving，无需MaxDps/WeakAuras。更新后重启游戏。
 请停用旧 SerpentStingHint；旧配置可保留。旧插件仍运行时，内置毒蛇监控暂停以免重复。
 HUD只有图标：没有背景、边框、文字或倒计时数字；保留冷却转圈。
@@ -15,3 +15,5 @@ HUD只有图标：没有背景、边框、文字或倒计时数字；保留冷�
 离线验证不代表游戏内实测；原生裁剪、转圈与实战估算仍需客户端验证。
 许可：GPL-2.0-only（合并发行版）；来源与原MIT许可见THIRD_PARTY.txt及附带许可证。
 完整用法：https://github.com/ufolyx-niper/HunterCueForever
+1.4.1：爆发优先查询忽略公共CD后的自身冷却，缺蓝/自身冷却/无存活宠物仍隐藏。
+爆发图标是冷却就绪提醒，其他施法限制以游戏为准；/hcf status可查看判断来源。
