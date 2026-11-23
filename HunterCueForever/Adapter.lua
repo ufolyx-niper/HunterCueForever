@@ -51,6 +51,7 @@ function ns.ScanSpells()
         if id then ns.known[key]=id;ns.ids[id]=key end
     end
     ns.scanPending=false;ns.ResetTracking()
+    if ns.ApplyUI then ns.ApplyUI() end
     if ns.RefreshOptions then ns.RefreshOptions() end
 end
 function ns.Profile()
@@ -163,7 +164,8 @@ function ns.Succeeded(unit,guid,id)
     for _,k in ipairs(ns.family[key] or {key}) do ns.cooldownCache[k]=nil;ns.fences[k]=now+(isBurst and 1 or 0.25) end
     if isBurst then ns.lastBurstAt=now
     elseif key~="auto" then
-        ns.actionSerial=(ns.actionSerial or 0)+1;ns.lastActionAt=now;ns.lastActionKey=key
+        ns.actionSerial=(ns.actionSerial or 0)+1;ns.lastActionAt=now
+        ns.lastActionKey=key~="mark" and key or nil -- Mark is never a large-icon recommendation, including settling.
     end
     if key=="hawk" then ns.hawkCount=math.min(2,(ns.hawkCount or 0)+1);ns.lastHawk=now
     elseif key=="arcane" then ns.hawkCount=0
@@ -213,6 +215,8 @@ function ns.Snapshot()
     end
     s.stableRecommendations=db.stableRecommendations
     s.burstRacial=db.burstRacial;s.burstRapid=db.burstRapid;s.burstWrath=db.burstWrath
+    s.markReminder=db.markReminder;s.markInCombat=db.markInCombat
+    s.classification=Call(UnitClassification,"target");s.targetInCombat=Call(UnitAffectingCombat,"target")
     s.inCombat=ns.enteringCombat==true or Call(InCombatLockdown)==true
     s.playerAlive=Call(UnitIsDeadOrGhost,"player")==false
     s.target=Call(UnitExists,"target")==true and Call(UnitCanAttack,"player","target")==true
@@ -294,7 +298,7 @@ function ns.Command(message)
         if ns.LayoutLockedByCombat() then Say("请脱战后重置。");return end
         ns.OpenOptions();ns.resetArmed=true;ns.RefreshOptions();return
     elseif cmd=="scale" then
-        if not ns.SetOption("scale",tonumber(arg)) then Say("缩放范围为 0.6–2，需脱战调整。");return end
+        Say("请用 /hcf 设置里的主图标/爆发图标大小，现已独立调整。");return
     elseif cmd=="pos" then
         local x,y=arg:match("^([+-]?%d+)%s+([+-]?%d+)$")
         if not ns.LayoutLockedByCombat() and x and y and math.abs(tonumber(x))<=4000 and math.abs(tonumber(y))<=4000 then ns.SavePosition(tonumber(x),tonumber(y)) end
@@ -305,11 +309,12 @@ function ns.Command(message)
             .." 技能状态:"..(s.readiness and "可读" or "不可读").." 射程:"..(s.ranged==nil and "未知" or "可读")
             .." 钉刺:"..(s.sting==nil and "未知" or s.stingEstimated and "估算" or "可读"))
         if #ns.missingEvents>0 then Say("未注册事件："..table.concat(ns.missingEvents,", ")) end
+        if ns.lastError then Say("最近一次状态/界面更新失败；请 /reload 后再次检查。");end
         return
     else
         Say("/hcf 打开设置；/hcf spec auto|bm|mm|sv · mode balanced|conserve|burst · targets 1|3|6")
         Say("/hcf weave normal|aggressive · burst on|off · traps on|off · show|hide|lock|reset|status · pos x y")
-        Say("/hcf config 打开设置 · /hcf scale 0.6–2 调整大小 · /hcf help 查看命令")
+        Say("/hcf config 打开设置并独立调整图标大小/间距 · /hcf help 查看命令")
         Say("/hcf stable on|off 固定推荐 · /hcf targets next 或 /hcf mode next 战斗中切换")
         return
     end
@@ -343,6 +348,7 @@ local function Event(_,event,...)
     end
     if not ns.db then return end
     if event=="PLAYER_REGEN_ENABLED" or event=="PLAYER_ENTERING_WORLD" then ns.enteringCombat=nil end
+    if event=="PLAYER_REGEN_ENABLED" or event=="PLAYER_REGEN_DISABLED" then ns.layoutRefreshPending=true end
     if event=="PLAYER_REGEN_DISABLED" then
         ns.enteringCombat=true -- Lockdown can still be false inside this event callback.
         if ns.EndPreview then ns.EndPreview() end
@@ -369,7 +375,9 @@ events:SetScript("OnUpdate",function(_,elapsed)
     elapsedTotal=elapsedTotal+elapsed;if elapsedTotal<0.1 then return end;elapsedTotal=0
     local ok=pcall(function()
         local locked=ns.LayoutLockedByCombat()
-        if locked~=ns.lastLayoutLock then ns.lastLayoutLock=locked;if ns.RefreshOptions then ns.RefreshOptions() end end
+        if ns.layoutRefreshPending or locked~=ns.lastLayoutLock then
+            ns.layoutRefreshPending=nil;ns.lastLayoutLock=locked;if ns.RefreshOptions then ns.RefreshOptions() end
+        end
         local s=ns.Snapshot();ns.UpdateUI(s,ns.Recommend(s,ns.Decide(s)))
     end)
     if not ok then ns.ClearRecommendation();ns.lastError=true;if ns.ShowError then ns.ShowError() end end

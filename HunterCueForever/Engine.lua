@@ -18,8 +18,7 @@ local function Ready(s,k,waiting)
     return true
 end
 function ns.ChoiceValid(s,k,waiting)
-    if not s.target or s.casting or not k or k=="auto" or ns.burstOption[k] or not Ready(s,k,waiting) then return false end
-    if k=="mark" and (s.mark~=false or s.markBackoff or s.markPending) then return false end
+    if not s.target or s.casting or not k or k=="auto" or k=="mark" or ns.burstOption[k] or not Ready(s,k,waiting) then return false end
     if k=="sting" and (s.sting~=false or s.stingBackoff or s.stingPending) then return false end
     if (k=="immolation" or k=="explosive") and (s.spec~="sv" or not s.traps or s.mode=="conserve") then return false end
     if s.spec=="sv" and ns.meleeSpell[k] and s.meleeDwell and s.meleeDwell>1.5
@@ -34,6 +33,17 @@ function ns.BurstReady(s)
         if s[ns.burstOption[key]]~=false and p and p.burstReady==true and (key~="wrath" or s.pet==true) then ready[key]=true end
     end
     return ready
+end
+function ns.MarkReminderReady(s)
+    local p=s.spells and s.spells.mark
+    if s.markReminder=="off" or not s.markReminder or not s.target or s.playerAlive~=true then return false end
+    if not p or p.burstReady~=true or p.range~=true then return false end
+    if s.mark~=false or s.markEstimated or s.markPending or s.markBackoff then return false end
+    if not s.markInCombat and (s.inCombat~=false or s.targetInCombat~=false) then return false end
+    if s.markReminder=="priority" then
+        return s.classification=="elite" or s.classification=="rareelite" or s.classification=="worldboss"
+    end
+    return s.markReminder=="all"
 end
 local function Spend(s,k,floor,core)
     if s.mode=="burst" or not s.mana or not s.maxMana or s.maxMana<=0 then return true end
@@ -54,7 +64,6 @@ function ns.Decide(s)
         return false
     end
     -- Unknown auras are NOT absence. Separate indicators remain visible.
-    if s.mark==false and not s.markBackoff and not s.markPending and Pick("mark","补猎人印记") then return out end
     if s.sting==false and not s.stingBackoff and not s.stingPending and Pick("sting",s.stingEstimated and "钉刺估时到期 · 核对目标" or "补毒蛇钉刺") then return out end
     if s.melee==false and s.ranged==false then
         out.reason="调整到技能射程";out.move="死区或距离过远：核对位置";return out

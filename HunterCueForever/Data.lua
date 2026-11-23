@@ -1,6 +1,6 @@
 -- SPDX-License-Identifier: MIT
 local _, ns = ...
-ns.version = "1.2.0"
+ns.version = "1.3.0"
 -- Rank order is explicit. Spell IDs are facts checked against WoWSims Forever
 -- 00fecd9c spell_data_auto_gen.go; never sort by ID or localized rank text.
 ns.spells = {
@@ -21,6 +21,7 @@ for key, ranks in pairs(ns.spells) do for _, id in ipairs(ranks) do ns.byID[id] 
 ns.castTime = {aimed=true, sniper=true, multi=true, volley=true}
 ns.selfSpell = {berserking=true,rapid=true, wrath=true, immolation=true, explosive=true}
 ns.burstOrder={"berserking","rapid","wrath"}
+ns.reminderOrder={"berserking","rapid","wrath","mark"}
 ns.burstOption={berserking="burstRacial",rapid="burstRapid",wrath="burstWrath"}
 ns.futureKeys={"hawk","arcane","aimed","sniper","multi","volley"}
 ns.meleeSpell = {raptor=true, mongoose=true, strider=true, immolation=true, explosive=true}
@@ -28,11 +29,13 @@ ns.family = {hawk={"hawk","arcane"}, arcane={"hawk","arcane"},
     aimed={"aimed","multi"}, multi={"aimed","multi"},
     immolation={"immolation","explosive"}, explosive={"immolation","explosive"}}
 ns.defaults = {spec="auto", mode="balanced", targets=1, cooldowns=true,
-    traps=false, weave="normal", enabled=true, locked=false, x=180, y=-130, scale=1,
-    fontScale=1, opacity=0.92, visibility="target", layoutVersion=2,displayVersion=2,
-    stableRecommendations=true,burstRacial=true,burstRapid=true,burstWrath=true,showDetails=false}
-ns.optionBounds={scale={0.6,2},fontScale={0.9,1.25},opacity={0.2,1},x={-4000,4000},y={-4000,4000}}
-ns.layoutKeys={"x","y","scale","fontScale","opacity"}
+    traps=false, weave="normal", enabled=true, locked=false, x=36, y=-80,
+    mainSize=56,burstSize=32,burstSpacing=8,rowGap=12,iconLayoutVersion=1,
+    visibility="target",layoutVersion=2,displayVersion=2,
+    stableRecommendations=true,burstRacial=true,burstRapid=true,burstWrath=true,
+    markReminder="priority",markInCombat=false}
+ns.optionBounds={mainSize={24,160},burstSize={12,96},burstSpacing={0,40},rowGap={0,80},x={-4000,4000},y={-4000,4000}}
+ns.layoutKeys={"x","y","mainSize","burstSize","burstSpacing","rowGap"}
 ns.specNames = {auto="自动", bm="兽王", mm="射击", sv="生存"}
 ns.modeNames = {balanced="均衡", conserve="省蓝", burst="全力"}
 function ns.Settings(raw)
@@ -45,13 +48,29 @@ function ns.Settings(raw)
     if not ns.modeNames[out.mode] then out.mode="balanced" end
     if out.targets~=1 and out.targets~=3 and out.targets~=6 then out.targets=1 end
     if out.weave~="normal" and out.weave~="aggressive" then out.weave="normal" end
-    for k,bounds in pairs(ns.optionBounds) do
-        if out[k]~=out[k] or math.abs(out[k])>4000 then out[k]=ns.defaults[k] end
-        out[k]=math.max(bounds[1],math.min(bounds[2],out[k]))
+    if out.markReminder~="off" and out.markReminder~="priority" and out.markReminder~="all" then out.markReminder="priority" end
+    local function Number(v,fallback)
+        if type(v)~="number" or v~=v or math.abs(v)==math.huge then return fallback end
+        return v
     end
-    if raw.layoutVersion~=2 then
-        out.x=math.max(-4000,math.min(4000,out.x*out.scale))
-        out.y=math.max(-4000,math.min(4000,out.y*out.scale))
+    local legacy=raw.iconLayoutVersion~=1 and (raw.scale~=nil or raw.x~=nil or raw.y~=nil or raw.layoutVersion~=nil or raw.displayVersion~=nil)
+    if legacy then
+        local scale=math.max(.6,math.min(2,Number(raw.scale,1)))
+        local x=math.max(-4000,math.min(4000,Number(raw.x,180)))
+        local y=math.max(-4000,math.min(4000,Number(raw.y,-130)))
+        local w,h,left,top,m,b,gap=370,222,12,61,52,30,12
+        if raw.displayVersion==2 then w,h,left,top,m,b,gap=360,raw.showDetails==true and 276 or 172,8,8,56,32,26
+        elseif raw.layoutVersion==2 then w,h,left,top,m,b=400,270,12,66,56,32 end
+        if raw.layoutVersion~=2 and raw.displayVersion~=2 then x=x*scale;y=y*scale end
+        -- Translate with the old unrounded dimensions before rounding new sizes.
+        out.x=x+(left+m/2-w/2)*scale;out.y=y+(h/2-top-m/2)*scale
+        out.mainSize=m*scale;out.burstSize=b*scale;out.burstSpacing=8*scale;out.rowGap=gap*scale
+    end
+    out.iconLayoutVersion=1
+    for k,bounds in pairs(ns.optionBounds) do
+        out[k]=Number(out[k],ns.defaults[k])
+        out[k]=math.max(bounds[1],math.min(bounds[2],out[k]))
+        if k~="x" and k~="y" then out[k]=math.floor(out[k]+0.5) end
     end
     out.layoutVersion=2
     if raw.displayVersion~=2 and out.visibility=="always" then out.visibility="target" end
@@ -59,15 +78,35 @@ function ns.Settings(raw)
     if out.visibility~="always" and out.visibility~="target" and out.visibility~="combat" then out.visibility="target" end
     return out
 end
--- Coordinates are in UIParent units; root's anchor offset uses root units.
-function ns.HudSize(db) return 360,db.showDetails and 276 or 172 end
-function ns.LayoutGeometry(db,width,height)
-    local w,h=ns.HudSize(db)
-    local scale=math.min(db.scale,math.max(0.1,(width-24)/w),math.max(0.1,(height-24)/h))
-    local mx=math.max(0,(width-w*scale)/2-12)
-    local my=math.max(0,(height-h*scale)/2-12)
-    local x=math.max(-mx,math.min(mx,db.x));local y=math.max(-my,math.min(my,db.y))
-    return x,y,scale,x/scale,y/scale
+-- x/y locate the main icon centre, not the bounding box centre.
+function ns.IconLayout(db,count)
+    count=count or 0
+    local rowWidth=count>0 and count*db.burstSize+(count-1)*db.burstSpacing or 0
+    local w=math.max(db.mainSize,rowWidth)
+    local h=db.mainSize+(count>0 and db.rowGap+db.burstSize or 0)
+    return {width=w,height=h,mainX=(w-db.mainSize)/2,burstX=(w-rowWidth)/2,
+        burstY=-(db.mainSize+db.rowGap),mainOffset=(h-db.mainSize)/2,count=count}
+end
+function ns.ReminderSlots(db,known)
+    local slots={}
+    for _,key in ipairs(ns.reminderOrder) do
+        local enabled
+        if key=="mark" then enabled=db.markReminder~="off"
+        else enabled=db.cooldowns and db[ns.burstOption[key]] end
+        if enabled and known[key] then slots[#slots+1]=key end
+    end
+    return slots
+end
+function ns.LayoutGeometry(db,width,height,layout)
+    layout=layout or ns.IconLayout(db,0)
+    local w,h=layout.width,layout.height
+    local scale=math.max(.001,math.min(1,(width-24)/w,(height-24)/h))
+    local mx=(width-w*scale)/2-12
+    local lo=-height/2+(h-db.mainSize/2)*scale+12
+    local hi=height/2-db.mainSize*scale/2-12
+    local x=mx>=0 and math.max(-mx,math.min(mx,db.x)) or 0
+    local y=lo<=hi and math.max(lo,math.min(hi,db.y)) or layout.mainOffset*scale
+    return x,y,scale,x/scale,y/scale-layout.mainOffset
 end
 function ns.CenterToParent(x,y,effectiveScale,parentScale,px,py)
     return x*effectiveScale/parentScale-px,y*effectiveScale/parentScale-py
