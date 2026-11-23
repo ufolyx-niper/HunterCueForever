@@ -9,3 +9,5 @@ package-manifest.json
 tests/
 tools/
 docs/research.md
+STABILITY_PLAN.md
+STABILITY_RESEARCH.txt

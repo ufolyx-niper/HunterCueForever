@@ -1,6 +1,6 @@
 -- SPDX-License-Identifier: MIT
 local _, ns = ...
-ns.version = "1.1.0"
+ns.version = "1.2.0"
 -- Rank order is explicit. Spell IDs are facts checked against WoWSims Forever
 -- 00fecd9c spell_data_auto_gen.go; never sort by ID or localized rank text.
 ns.spells = {
@@ -10,6 +10,8 @@ ns.spells = {
     aimed = {19434,20900,20901,20902,20903,20904},
     sniper = {1310687,1310785,1310786}, multi = {2643}, volley = {1510,14294,14295},
     hawk = {1293241,1293525,1293526,1293527}, wrath = {19574}, rapid = {3045},
+    -- Learned-only compatibility alias; prefer Forever's canonical 20554.
+    berserking = {26297,20554},
     raptor = {2973,14260,14261,14262,14263,14264,14265,14266},
     mongoose = {1495,14269,14270,14271}, strider = {1317257},
     immolation = {13795,14302,14303,14304,14305}, explosive = {13813,14316,14317},
@@ -17,14 +19,18 @@ ns.spells = {
 ns.byID = {}
 for key, ranks in pairs(ns.spells) do for _, id in ipairs(ranks) do ns.byID[id] = key end end
 ns.castTime = {aimed=true, sniper=true, multi=true, volley=true}
-ns.selfSpell = {rapid=true, wrath=true, immolation=true, explosive=true}
+ns.selfSpell = {berserking=true,rapid=true, wrath=true, immolation=true, explosive=true}
+ns.burstOrder={"berserking","rapid","wrath"}
+ns.burstOption={berserking="burstRacial",rapid="burstRapid",wrath="burstWrath"}
+ns.futureKeys={"hawk","arcane","aimed","sniper","multi","volley"}
 ns.meleeSpell = {raptor=true, mongoose=true, strider=true, immolation=true, explosive=true}
 ns.family = {hawk={"hawk","arcane"}, arcane={"hawk","arcane"},
     aimed={"aimed","multi"}, multi={"aimed","multi"},
     immolation={"immolation","explosive"}, explosive={"immolation","explosive"}}
 ns.defaults = {spec="auto", mode="balanced", targets=1, cooldowns=true,
     traps=false, weave="normal", enabled=true, locked=false, x=180, y=-130, scale=1,
-    fontScale=1, opacity=0.92, visibility="always", layoutVersion=2}
+    fontScale=1, opacity=0.92, visibility="target", layoutVersion=2,displayVersion=2,
+    stableRecommendations=true,burstRacial=true,burstRapid=true,burstWrath=true,showDetails=false}
 ns.optionBounds={scale={0.6,2},fontScale={0.9,1.25},opacity={0.2,1},x={-4000,4000},y={-4000,4000}}
 ns.layoutKeys={"x","y","scale","fontScale","opacity"}
 ns.specNames = {auto="自动", bm="兽王", mm="射击", sv="生存"}
@@ -48,14 +54,18 @@ function ns.Settings(raw)
         out.y=math.max(-4000,math.min(4000,out.y*out.scale))
     end
     out.layoutVersion=2
-    if out.visibility~="always" and out.visibility~="target" and out.visibility~="combat" then out.visibility="always" end
+    if raw.displayVersion~=2 and out.visibility=="always" then out.visibility="target" end
+    out.displayVersion=2
+    if out.visibility~="always" and out.visibility~="target" and out.visibility~="combat" then out.visibility="target" end
     return out
 end
 -- Coordinates are in UIParent units; root's anchor offset uses root units.
+function ns.HudSize(db) return 360,db.showDetails and 276 or 172 end
 function ns.LayoutGeometry(db,width,height)
-    local scale=math.min(db.scale,math.max(0.1,(width-24)/400),math.max(0.1,(height-24)/270))
-    local mx=math.max(0,(width-400*scale)/2-12)
-    local my=math.max(0,(height-270*scale)/2-12)
+    local w,h=ns.HudSize(db)
+    local scale=math.min(db.scale,math.max(0.1,(width-24)/w),math.max(0.1,(height-24)/h))
+    local mx=math.max(0,(width-w*scale)/2-12)
+    local my=math.max(0,(height-h*scale)/2-12)
     local x=math.max(-mx,math.min(mx,db.x));local y=math.max(-my,math.min(my,db.y))
     return x,y,scale,x/scale,y/scale
 end

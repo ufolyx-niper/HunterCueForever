@@ -34,6 +34,8 @@ ns.known={};ns.cooldownCache={};ns.fences={};ns.pending={};ns.inferred={};ns.att
 function ns.ResetTracking()
     ns.cooldownCache={};ns.fences={};ns.pending={};ns.inferred={};ns.attempts={}
     ns.hawkCount=0;ns.lastHawk=nil;ns.lastAuto=nil;ns.meleeSince=nil;ns.lastError=nil;ns.generation=ns.generation+1
+    ns.actionSerial=(ns.actionSerial or 0)+1;ns.lastActionAt=nil;ns.lastActionKey=nil;ns.lastBurstAt=nil
+    if ns.ClearRecommendation then ns.ClearRecommendation() end
 end
 function ns.ScanSpells()
     if Call(InCombatLockdown)==true then ns.scanPending=true;return end
@@ -49,6 +51,7 @@ function ns.ScanSpells()
         if id then ns.known[key]=id;ns.ids[id]=key end
     end
     ns.scanPending=false;ns.ResetTracking()
+    if ns.RefreshOptions then ns.RefreshOptions() end
 end
 function ns.Profile()
     if ns.db.spec~="auto" then return ns.db.spec end
@@ -60,8 +63,15 @@ end
 local function Cooldown(id)
     local info,ok=SpellAPI("GetSpellCooldown",id)
     if not ok or type(info)~="table" then return {} end
-    return {active=Field(info,"isActive"),enabled=Field(info,"isEnabled"),
+    local rate,readable=Field(info,"modRate")
+    if readable and rate==nil then rate=1 end -- compatibility for APIs without this field
+    return {active=Field(info,"isActive"),enabled=Field(info,"isEnabled"),rate=Num(rate),
         start=Num(Field(info,"startTime")),duration=Num(Field(info,"duration"))}
+end
+local function Remaining(cd,now)
+    if cd.enabled~=true then return nil end
+    if cd.active==false then return 0 end
+    if cd.active==true and cd.start and cd.duration and cd.rate==1 then return math.max(0,cd.start+cd.duration-now) end
 end
 -- The isOnGCD flag is sampled only from its documented event context.
 function ns.CooldownEvent()
@@ -73,22 +83,27 @@ function ns.CooldownEvent()
 end
 local function Availability(key,id,gcd,now)
     local usable,oom,ok=Pair(C_Spell and C_Spell.IsSpellUsable,id)
-    if not ok then return nil,nil,nil end
-    if usable~=true or oom==true then return false,nil,oom end
-    if ns.fences[key] and now<ns.fences[key] then return false,nil,oom end
-    local cd=Cooldown(id);local remaining
-    if cd.start and cd.duration then remaining=math.max(0,cd.start+cd.duration-now) end
-    if cd.enabled==false then return false,remaining,oom end
-    if cd.enabled~=true then return nil,remaining,oom end
-    if cd.active==false then return true,0,oom end
-    if cd.active~=true then return nil,remaining,oom end
-    if cd.start and cd.duration and gcd.start and gcd.duration then
-        -- Readable numeric data takes precedence over the event flag.
-        return cd.start==gcd.start and cd.duration==gcd.duration,remaining,oom
+    if not ok then return nil,nil,nil,nil,nil end
+    if usable~=true or oom==true then return false,nil,oom,usable,false end
+    if ns.fences[key] and now<ns.fences[key] then return false,nil,oom,usable,false end
+    local cd=Cooldown(id);local remaining=Remaining(cd,now)
+    if cd.enabled==false then return false,remaining,oom,usable,false end
+    if cd.enabled~=true then return nil,remaining,oom,usable,nil end
+    if cd.active==false then return true,0,oom,usable,true end
+    if cd.active~=true then return nil,remaining,oom,usable,nil end
+    local gcdOnly=false
+    if gcd.active==true then
+        if cd.start and cd.duration and cd.rate and gcd.start and gcd.duration and gcd.rate then
+            gcdOnly=cd.start==gcd.start and cd.duration==gcd.duration and cd.rate==gcd.rate
+        else
+            local cache=ns.cooldownCache[key]
+            gcdOnly=cache and cache.id==id and now-cache.stamp<=2 and cache.gcd==true or false
+        end
     end
-    local cache=ns.cooldownCache[key]
-    if cache and cache.id==id and now-cache.stamp<=2 then return cache.gcd==true,remaining,oom end
-    return false,remaining,oom
+    local gcdRemaining=Remaining(gcd,now)
+    -- Forecast applies ONLY to the main next action, never to the burst row.
+    local future=gcd.active==true and remaining and gcdRemaining and remaining<=gcdRemaining+0.001
+    return gcdOnly or future or false,remaining,oom,usable,gcdOnly
 end
 local function Cost(id)
     local costs=SpellAPI("GetSpellPowerCost",id)
@@ -121,6 +136,7 @@ local function TargetIdentity()
 end
 function ns.TargetChanged()
     ns.generation=ns.generation+1;ns.inferred={};ns.pending={};ns.attempts={};ns.meleeSince=nil;ns.lastAuto=nil
+    if ns.ClearRecommendation then ns.ClearRecommendation() end
 end
 function ns.Sent(unit,targetName,guid,id)
     unit=ns.Clean(unit);targetName=ns.Clean(targetName);guid=ns.Clean(guid);id=ns.Clean(id)
@@ -143,7 +159,12 @@ function ns.Succeeded(unit,guid,id)
     if unit~="player" or type(id)~="number" then return end
     local key=ns.byID[id];if not key then return end
     local now=Now()
-    for _,k in ipairs(ns.family[key] or {key}) do ns.cooldownCache[k]=nil;ns.fences[k]=now+0.25 end
+    local isBurst=ns.burstOption[key]~=nil
+    for _,k in ipairs(ns.family[key] or {key}) do ns.cooldownCache[k]=nil;ns.fences[k]=now+(isBurst and 1 or 0.25) end
+    if isBurst then ns.lastBurstAt=now
+    elseif key~="auto" then
+        ns.actionSerial=(ns.actionSerial or 0)+1;ns.lastActionAt=now;ns.lastActionKey=key
+    end
     if key=="hawk" then ns.hawkCount=math.min(2,(ns.hawkCount or 0)+1);ns.lastHawk=now
     elseif key=="arcane" then ns.hawkCount=0
     elseif key=="auto" then ns.lastAuto=now end
@@ -163,7 +184,7 @@ local function AuraState(key,now)
     local attempt=ns.attempts[key]
     if active==true then ns.attempts[key]=nil;return true,false,false end
     if active==false and attempt then
-        if not attempt.checked and now-attempt.at>=1.5 then
+        if not attempt.checked and now-attempt.at>=2 then
             attempt.checked=true;attempt.failures=math.min(2,attempt.failures+1)
             if attempt.failures>=2 then attempt.pauseUntil=now+20 end
         end
@@ -182,10 +203,21 @@ function ns.Snapshot()
     if ns.lastHawk and now-ns.lastHawk>18 then ns.hawkCount=0;ns.lastHawk=nil end
     local s={now=now,spells={},spec=ns.Profile(),mode=db.mode,targets=db.targets,
         cooldowns=db.cooldowns,traps=db.traps,weave=db.weave,hawkCount=ns.hawkCount or 0,readiness=false}
+    s.generation=ns.generation;s.actionSerial=ns.actionSerial or 0
+    s.lastActionAt=ns.lastActionAt;s.lastActionKey=ns.lastActionKey;s.lastBurstAt=ns.lastBurstAt
+    s.selectionBlockedUntil=now
+    for key,untilTime in pairs(ns.fences) do
+        if key~="auto" and not ns.burstOption[key] and ns.known[key] and untilTime>s.selectionBlockedUntil then
+            s.selectionBlockedUntil=untilTime
+        end
+    end
+    s.stableRecommendations=db.stableRecommendations
+    s.burstRacial=db.burstRacial;s.burstRapid=db.burstRapid;s.burstWrath=db.burstWrath
     s.inCombat=ns.enteringCombat==true or Call(InCombatLockdown)==true
+    s.playerAlive=Call(UnitIsDeadOrGhost,"player")==false
     s.target=Call(UnitExists,"target")==true and Call(UnitCanAttack,"player","target")==true
         and Call(UnitIsDeadOrGhost,"target")==false and Call(UnitIsPlayer,"target")==false
-        and Call(UnitIsDeadOrGhost,"player")==false
+        and s.playerAlive
     local cast,castOK=Call(UnitCastingInfo,"player");local channel,channelOK=Call(UnitChannelInfo,"player")
     s.casting=not castOK or not channelOK or cast~=nil or channel~=nil
     local speed=Num(Call(GetUnitSpeed,"player"));if speed then s.moving=speed>0 end
@@ -193,11 +225,11 @@ function ns.Snapshot()
     local _,regen=Pair(GetManaRegen);s.regen=Num(regen)
     s.pet=Call(UnitExists,"pet")==true and Call(UnitIsDeadOrGhost,"pet")==false
     local gcd=Cooldown(61304)
-    s.gcd=gcd.active==true
+    s.gcd=gcd.active==true;s.gcdKnown=gcd.active~=nil;s.gcdStart=gcd.start;s.gcdRemaining=Remaining(gcd,now)
     for key,id in pairs(ns.known) do
-        local ready,remaining,oom=Availability(key,id,gcd,now)
+        local ready,remaining,oom,usable,burstReady=Availability(key,id,gcd,now)
         local range=SpellAPI("IsSpellInRange",id,"target")
-        s.spells[key]={id=id,ready=ready,remaining=remaining,oom=oom,range=range,
+        s.spells[key]={id=id,ready=ready,remaining=remaining,oom=oom,range=range,usable=usable,burstReady=burstReady,
             queued=Call(IsCurrentSpell,id),cost=Cost(id)}
         if key~="auto" and ready~=nil then s.readiness=true end
     end
@@ -209,6 +241,8 @@ function ns.Snapshot()
     s.sinceAuto=ns.lastAuto and now-ns.lastAuto
     s.mark,s.markEstimated,s.markBackoff=AuraState("mark",now)
     s.sting,s.stingEstimated,s.stingBackoff=AuraState("sting",now)
+    s.markPending=ns.attempts.mark~=nil and now-ns.attempts.mark.at<2
+    s.stingPending=ns.attempts.sting~=nil and now-ns.attempts.sting.at<2
     return s
 end
 function ns.SpellName(key)
@@ -242,11 +276,15 @@ function ns.Command(message)
         if ns.LayoutLockedByCombat() then Say("请脱战后打开设置。");return end
         if ns.OpenOptions then ns.OpenOptions() end;return
     elseif cmd=="spec" and ns.specNames[arg] then ns.db.spec=arg;ns.ResetTracking()
+    elseif cmd=="mode" and arg=="next" then
+        ns.db.mode=({balanced="conserve",conserve="burst",burst="balanced"})[ns.db.mode]
+    elseif cmd=="targets" and arg=="next" then ns.db.targets=({[1]=3,[3]=6,[6]=1})[ns.db.targets]
     elseif cmd=="mode" and ns.modeNames[arg] then ns.db.mode=arg
     elseif cmd=="targets" and (arg=="1" or arg=="3" or arg=="6") then ns.db.targets=tonumber(arg)
     elseif cmd=="weave" and (arg=="normal" or arg=="aggressive") then ns.db.weave=arg;ns.ResetTracking()
     elseif (cmd=="burst" or cmd=="traps") and (arg=="on" or arg=="off") then
         ns.db[cmd=="burst" and "cooldowns" or "traps"]=arg=="on"
+    elseif cmd=="stable" and (arg=="on" or arg=="off") then ns.db.stableRecommendations=arg=="on"
     elseif cmd=="show" then ns.db.enabled=true
     elseif cmd=="hide" then ns.db.enabled=false
     elseif cmd=="lock" then
@@ -272,6 +310,7 @@ function ns.Command(message)
         Say("/hcf 打开设置；/hcf spec auto|bm|mm|sv · mode balanced|conserve|burst · targets 1|3|6")
         Say("/hcf weave normal|aggressive · burst on|off · traps on|off · show|hide|lock|reset|status · pos x y")
         Say("/hcf config 打开设置 · /hcf scale 0.6–2 调整大小 · /hcf help 查看命令")
+        Say("/hcf stable on|off 固定推荐 · /hcf targets next 或 /hcf mode next 战斗中切换")
         return
     end
     if ns.ApplyUI then ns.ApplyUI() end
@@ -331,9 +370,9 @@ events:SetScript("OnUpdate",function(_,elapsed)
     local ok=pcall(function()
         local locked=ns.LayoutLockedByCombat()
         if locked~=ns.lastLayoutLock then ns.lastLayoutLock=locked;if ns.RefreshOptions then ns.RefreshOptions() end end
-        local s=ns.Snapshot();ns.UpdateUI(s,ns.Decide(s))
+        local s=ns.Snapshot();ns.UpdateUI(s,ns.Recommend(s,ns.Decide(s)))
     end)
-    if not ok then ns.lastError=true;if ns.ShowError then ns.ShowError() end end
+    if not ok then ns.ClearRecommendation();ns.lastError=true;if ns.ShowError then ns.ShowError() end end
 end)
 SLASH_HUNTERCUEFOREVER1="/hcf"
 SlashCmdList.HUNTERCUEFOREVER=ns.Command

@@ -1,9 +1,11 @@
 -- SPDX-License-Identifier: MIT
 -- Pure policy: receives ONLY sanitized data. No game API access in this file.
 local _, ns = ...
-local function Ready(s,k)
+local function Ready(s,k,waiting)
     local p=s.spells[k]
-    if not p or p.ready~=true then return false end
+    if not p then return false end
+    if waiting then if p.usable~=true then return false end
+    elseif p.ready~=true then return false end
     -- Volley targets a location, so the API can legitimately return nil.
     -- A positive ranged-shot probe is a conservative target-distance check;
     -- the player still chooses the ground location. Explicit false is never overridden.
@@ -14,6 +16,24 @@ local function Ready(s,k)
     if ns.castTime[k] and s.moving~=false then return false end
     if k=="raptor" and p.queued~=false then return false end
     return true
+end
+function ns.ChoiceValid(s,k,waiting)
+    if not s.target or s.casting or not k or k=="auto" or ns.burstOption[k] or not Ready(s,k,waiting) then return false end
+    if k=="mark" and (s.mark~=false or s.markBackoff or s.markPending) then return false end
+    if k=="sting" and (s.sting~=false or s.stingBackoff or s.stingPending) then return false end
+    if (k=="immolation" or k=="explosive") and (s.spec~="sv" or not s.traps or s.mode=="conserve") then return false end
+    if s.spec=="sv" and ns.meleeSpell[k] and s.meleeDwell and s.meleeDwell>1.5
+        and (not s.spells.raptor or s.spells.raptor.queued==false) then return false end
+    return true
+end
+function ns.BurstReady(s)
+    local ready={}
+    if not s.cooldowns or s.playerAlive~=true then return ready end
+    for _,key in ipairs(ns.burstOrder) do
+        local p=s.spells and s.spells[key]
+        if s[ns.burstOption[key]]~=false and p and p.burstReady==true and (key~="wrath" or s.pet==true) then ready[key]=true end
+    end
+    return ready
 end
 local function Spend(s,k,floor,core)
     if s.mode=="burst" or not s.mana or not s.maxMana or s.maxMana<=0 then return true end
@@ -29,17 +49,13 @@ function ns.Decide(s)
     if not s.target then out.reason="选择存活的敌对目标";return out end
     if s.casting then out.reason="施法/引导中 · 不要打断";return out end
     if s.spec~="sv" and s.melee==true and s.ranged==false then out.move="拉开距离，回到远程射程" end
-    if s.cooldowns then
-        if s.spec=="bm" and s.pet and Ready(s,"wrath") then out.burst="wrath"
-        elseif s.ranged==true and Ready(s,"rapid") then out.burst="rapid" end
-    end
     local function Pick(k,reason)
         if Ready(s,k) then out.key=k;out.reason=reason;return true end
         return false
     end
     -- Unknown auras are NOT absence. Separate indicators remain visible.
-    if s.mark==false and not s.markBackoff and Pick("mark","补猎人印记") then return out end
-    if s.sting==false and not s.stingBackoff and Pick("sting",s.stingEstimated and "钉刺估时到期 · 核对目标" or "补毒蛇钉刺") then return out end
+    if s.mark==false and not s.markBackoff and not s.markPending and Pick("mark","补猎人印记") then return out end
+    if s.sting==false and not s.stingBackoff and not s.stingPending and Pick("sting",s.stingEstimated and "钉刺估时到期 · 核对目标" or "补毒蛇钉刺") then return out end
     if s.melee==false and s.ranged==false then
         out.reason="调整到技能射程";out.move="死区或距离过远：核对位置";return out
     end
