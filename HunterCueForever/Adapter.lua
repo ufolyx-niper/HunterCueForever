@@ -27,6 +27,22 @@ local function Num(v)
     if type(v)=="number" and v==v and math.abs(v)<1e15 then return v end
 end
 local function Now() return Call(GetTime) or 0 end
+local function CastInfo(now)
+    if type(UnitCastingInfo)~="function" then return nil,false end
+    local ok,name,_,_,started,ends,_,castID,_,spellID=pcall(UnitCastingInfo,"player")
+    if not ok then return nil,false end
+    local readable;name,readable=ns.Clean(name)
+    if not readable then return nil,false end
+    started=Num(ns.Clean(started));ends=Num(ns.Clean(ends));spellID=Num(ns.Clean(spellID))
+    castID=ns.Clean(castID)
+    if type(castID)~="string" and type(castID)~="number" then castID=nil end
+    local key=spellID and ns.byID[spellID]
+    if type(name)=="string" and started and ends and started<=ends and started/1000<=now
+        and ends/1000>now and ends/1000-now<=6 and key and ns.castTime[key] then
+        return name,true,key,ends/1000-now,started/1000,castID
+    end
+    return name,true
+end
 local function SpellAPI(name,...)
     return Call(C_Spell and C_Spell[name],...)
 end
@@ -38,19 +54,21 @@ function ns.ResetTracking()
     if ns.ClearRecommendation then ns.ClearRecommendation() end
 end
 function ns.ScanSpells()
-    if Call(InCombatLockdown)==true then ns.scanPending=true;return end
+    if Call(InCombatLockdown)==true then ns.scanPending=true;ns.scanComplete=false;return end
     ns.known={};ns.ids={}
+    local readable=true
     for key,ranks in pairs(ns.spells) do
         local learned={}
         for _,id in ipairs(ranks) do
             local yes,ok=Call(IsPlayerSpell,id)
             if not ok then yes=Call(C_SpellBook and C_SpellBook.IsSpellKnown,id) end
+            if type(yes)~="boolean" then readable=false end
             if yes==true then learned[id]=true end
         end
         local id=ns.SelectRank(ranks,learned)
         if id then ns.known[key]=id;ns.ids[id]=key end
     end
-    ns.scanPending=false;ns.ResetTracking()
+    ns.scanPending=false;ns.scanComplete=readable and next(ns.known)~=nil;ns.ResetTracking()
     if ns.ApplyUI then ns.ApplyUI() end
     if ns.RefreshOptions then ns.RefreshOptions() end
 end
@@ -165,7 +183,7 @@ function ns.Succeeded(unit,guid,id)
     if isBurst then ns.lastBurstAt=now
     elseif key~="auto" then
         ns.actionSerial=(ns.actionSerial or 0)+1;ns.lastActionAt=now
-        ns.lastActionKey=key~="mark" and key or nil -- Mark is never a large-icon recommendation, including settling.
+        ns.lastActionKey=(key~="mark" and key~="sting") and key or nil -- Independent monitors never occupy the spent main icon.
     end
     if key=="hawk" then ns.hawkCount=math.min(2,(ns.hawkCount or 0)+1);ns.lastHawk=now
     elseif key=="arcane" then ns.hawkCount=0
@@ -222,8 +240,12 @@ function ns.Snapshot()
     s.target=Call(UnitExists,"target")==true and Call(UnitCanAttack,"player","target")==true
         and Call(UnitIsDeadOrGhost,"target")==false and Call(UnitIsPlayer,"target")==false
         and s.playerAlive
-    local cast,castOK=Call(UnitCastingInfo,"player");local channel,channelOK=Call(UnitChannelInfo,"player")
+    local cast,castOK,castKey,castRemaining,castStartedAt,castID=CastInfo(now)
+    local channel,channelOK=Call(UnitChannelInfo,"player")
     s.casting=not castOK or not channelOK or cast~=nil or channel~=nil
+    if channelOK and channel==nil and castOK then
+        s.castKey=castKey;s.castRemaining=castRemaining;s.castStartedAt=castStartedAt;s.castID=castID
+    end
     local speed=Num(Call(GetUnitSpeed,"player"));if speed then s.moving=speed>0 end
     s.mana=Num(Call(UnitPower,"player",0));s.maxMana=Num(Call(UnitPowerMax,"player",0))
     local _,regen=Pair(GetManaRegen);s.regen=Num(regen)
@@ -343,6 +365,7 @@ local function Event(_,event,...)
         if not ok or class~="HUNTER" or type(interface)~="number" or interface<16000 or interface>=20000 then return end
         ns.db=ns.Settings(HunterCueForeverDB);HunterCueForeverDB=ns.db;ns.ScanSpells()
         if ns.CreateUI then ns.CreateUI() end
+        if ns.InitSting then ns.InitSting() end
         if ns.InitOptions then ns.InitOptions() end
         return
     end

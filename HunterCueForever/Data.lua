@@ -1,6 +1,6 @@
 -- SPDX-License-Identifier: MIT
 local _, ns = ...
-ns.version = "1.3.0"
+ns.version = "1.4.0"
 -- Rank order is explicit. Spell IDs are facts checked against WoWSims Forever
 -- 00fecd9c spell_data_auto_gen.go; never sort by ID or localized rank text.
 ns.spells = {
@@ -33,9 +33,23 @@ ns.defaults = {spec="auto", mode="balanced", targets=1, cooldowns=true,
     mainSize=56,burstSize=32,burstSpacing=8,rowGap=12,iconLayoutVersion=1,
     visibility="target",layoutVersion=2,displayVersion=2,
     stableRecommendations=true,burstRacial=true,burstRapid=true,burstWrath=true,
-    markReminder="priority",markInCombat=false}
+    markReminder="priority",markInCombat=false,
+    stingEnabled=true,stingIdle=false,stingX=140,stingY=-100,stingSize=44,
+    stingRefreshTime=10,stingOpening=true,stingOpeningHealth=5000,stingSkipElementals=false,auxiliaryLayoutVersion=0}
 ns.optionBounds={mainSize={24,160},burstSize={12,96},burstSpacing={0,40},rowGap={0,80},x={-4000,4000},y={-4000,4000}}
-ns.layoutKeys={"x","y","mainSize","burstSize","burstSpacing","rowGap"}
+ns.optionBounds.stingX={-4000,4000};ns.optionBounds.stingY={-4000,4000};ns.optionBounds.stingSize={16,128}
+ns.optionBounds.stingRefreshTime={1,60};ns.optionBounds.stingOpeningHealth={1,10000000}
+ns.layoutKeys={"x","y","mainSize","burstSize","burstSpacing","rowGap","stingX","stingY","stingSize"}
+ns.positionKeys={x=true,y=true,stingX=true,stingY=true}
+for i,key in ipairs(ns.reminderOrder) do
+    for _,axis in ipairs({"X","Y"}) do
+        local field=key..axis
+        ns.defaults[field]=axis=="X" and ns.defaults.x+(i-2.5)*(ns.defaults.burstSize+ns.defaults.burstSpacing)
+            or ns.defaults.y-ns.defaults.mainSize/2-ns.defaults.rowGap-ns.defaults.burstSize/2
+        ns.optionBounds[field]={-4000,4000};ns.positionKeys[field]=true
+        ns.layoutKeys[#ns.layoutKeys+1]=field
+    end
+end
 ns.specNames = {auto="自动", bm="兽王", mm="射击", sv="生存"}
 ns.modeNames = {balanced="均衡", conserve="省蓝", burst="全力"}
 function ns.Settings(raw)
@@ -70,7 +84,7 @@ function ns.Settings(raw)
     for k,bounds in pairs(ns.optionBounds) do
         out[k]=Number(out[k],ns.defaults[k])
         out[k]=math.max(bounds[1],math.min(bounds[2],out[k]))
-        if k~="x" and k~="y" then out[k]=math.floor(out[k]+0.5) end
+        if not ns.positionKeys[k] then out[k]=math.floor(out[k]+0.5) end
     end
     out.layoutVersion=2
     if raw.displayVersion~=2 and out.visibility=="always" then out.visibility="target" end
@@ -96,6 +110,25 @@ function ns.ReminderSlots(db,known)
         if enabled and known[key] then slots[#slots+1]=key end
     end
     return slots
+end
+-- One-time migration and explicit user-requested arrangement share the old row geometry.
+function ns.ArrangeAuxiliary(db,known,includeMissing)
+    local active=ns.ReminderSlots(db,known);local order={};local included={}
+    for _,key in ipairs(active) do order[#order+1]=key;included[key]=true end
+    if includeMissing then
+        for _,key in ipairs(ns.reminderOrder) do if not included[key] then order[#order+1]=key end end
+    end
+    local count=#active>0 and #active or #order
+    local pitch=db.burstSize+db.burstSpacing
+    for i,key in ipairs(order) do
+        db[key.."X"]=math.max(-4000,math.min(4000,db.x+(i-(count+1)/2)*pitch))
+        db[key.."Y"]=math.max(-4000,math.min(4000,db.y-db.mainSize/2-db.rowGap-db.burstSize/2))
+    end
+end
+function ns.MigrateAuxiliary()
+    if ns.db.auxiliaryLayoutVersion==1 then return end
+    if not ns.scanComplete or ns.scanPending or ns.LayoutLockedByCombat() then return end
+    ns.ArrangeAuxiliary(ns.db,ns.known,true);ns.db.auxiliaryLayoutVersion=1
 end
 function ns.LayoutGeometry(db,width,height,layout)
     layout=layout or ns.IconLayout(db,0)

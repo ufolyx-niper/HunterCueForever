@@ -18,8 +18,7 @@ local function Ready(s,k,waiting)
     return true
 end
 function ns.ChoiceValid(s,k,waiting)
-    if not s.target or s.casting or not k or k=="auto" or k=="mark" or ns.burstOption[k] or not Ready(s,k,waiting) then return false end
-    if k=="sting" and (s.sting~=false or s.stingBackoff or s.stingPending) then return false end
+    if not s.target or s.casting or not k or k=="auto" or k=="mark" or k=="sting" or ns.burstOption[k] or not Ready(s,k,waiting) then return false end
     if (k=="immolation" or k=="explosive") and (s.spec~="sv" or not s.traps or s.mode=="conserve") then return false end
     if s.spec=="sv" and ns.meleeSpell[k] and s.meleeDwell and s.meleeDwell>1.5
         and (not s.spells.raptor or s.spells.raptor.queued==false) then return false end
@@ -63,8 +62,7 @@ function ns.Decide(s)
         if Ready(s,k) then out.key=k;out.reason=reason;return true end
         return false
     end
-    -- Unknown auras are NOT absence. Separate indicators remain visible.
-    if s.sting==false and not s.stingBackoff and not s.stingPending and Pick("sting",s.stingEstimated and "钉刺估时到期 · 核对目标" or "补毒蛇钉刺") then return out end
+    -- Sting and Mark are owned exclusively by independent monitors.
     if s.melee==false and s.ranged==false then
         out.reason="调整到技能射程";out.move="死区或距离过远：核对位置";return out
     end

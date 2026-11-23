@@ -45,12 +45,61 @@ local function HeldOutput(s,raw,item)
     if s.spec=="sv" and ns.castTime[item.key] and s.ranged==true then move="保持远程位置，准备已固定技能" end
     return {key=item.key,reason=item.reason,move=move,locked=true}
 end
+-- A separate forecast while a cast is in flight; never changes live readiness.
+function ns.ProjectCast(s)
+    if not s.target or not s.casting or not s.castKey or not ns.castTime[s.castKey]
+        or not s.castRemaining or s.castRemaining<=0 or s.castRemaining>6 or not s.castStartedAt
+        or not s.gcdKnown or (s.gcd and not s.gcdRemaining) then return nil end
+    local horizon=math.max(s.castRemaining,s.gcd and s.gcdRemaining or 0)
+    if horizon>6 then return nil end
+    local future={};for k,v in pairs(s) do future[k]=v end
+    future.casting=false;future.spells={}
+    local current=s.spells[s.castKey]
+    if s.mana then
+        if not current or not current.cost then return nil end
+        -- Reserve the in-flight cast's cost; do not assume it is already paid or
+        -- that future regeneration will fund another spell.
+        future.mana=math.max(0,s.mana-current.cost)
+    end
+    local excluded={[s.castKey]=true}
+    for _,key in ipairs(ns.family[s.castKey] or {}) do excluded[key]=true end
+    for key,p in pairs(s.spells) do
+        local q={};for k,v in pairs(p) do q[k]=v end
+        if excluded[key] or (future.mana and (not p.cost or p.cost>future.mana)) then
+            q.ready=false;q.usable=false;q.remaining=nil
+        elseif p.usable==true and p.remaining and p.remaining<=horizon+EPS then q.ready=true end
+        future.spells[key]=q
+    end
+    return future,horizon
+end
+local function CastForecast(s,raw,m)
+    m.item=nil;m.waiting=nil
+    local future,horizon=ns.ProjectCast(s)
+    if not future then m.castItem=nil;m.castSource=nil;return Copy(raw) end
+    local token=s.castID or s.castStartedAt
+    if m.castSource~=s.castKey or m.castToken~=token then m.castItem=nil end
+    m.castSource=s.castKey;m.castToken=token
+    local item=m.castItem
+    if s.stableRecommendations==false or not Valid(future,item,false) then
+        local out=ns.Decide(future);local allowed=false
+        for _,key in ipairs(ns.futureKeys) do if key==out.key then allowed=true end end
+        item=allowed and ns.ChoiceValid(future,out.key,false) and {key=out.key,id=future.spells[out.key].id,reason=out.reason} or nil
+    end
+    m.castItem=item;m.seen=true;m.serial=s.actionSerial;m.gcd=s.gcd;m.gcdStart=s.gcdStart
+    if not item then return Copy(raw) end
+    return {key=item.key,wait=true,castPreview=true,waitRemaining=horizon,reason="等待当前读条和公共CD结束",move=""}
+end
 function ns.Recommend(s,raw,memo)
     local m=memo or ns.recommendationState;local now=s.now or 0
     local context=Context(s)
     if m.context~=context or s.stableRecommendations==false then
         for k in pairs(m) do m[k]=nil end;m.context=context
     end
+    if s.casting then return CastForecast(s,raw,m) end
+    local carry=m.castItem
+    local completed=carry and s.lastActionKey==m.castSource and s.lastActionAt
+        and now-s.lastActionAt>=0 and now-s.lastActionAt<=.3 and Valid(s,carry,false)
+    m.castItem=nil;m.castSource=nil;m.castToken=nil
     if s.stableRecommendations==false then
         local future=ns.PlanWait(s,raw)
         return future and WaitingOutput(s,raw,future) or Copy(raw)
@@ -61,7 +110,8 @@ function ns.Recommend(s,raw,memo)
         (not m.gcd or (s.gcdStart and m.gcdStart and s.gcdStart>m.gcdStart+0.05))
     if action or newGCD then
         m.item=nil;m.waiting=nil
-        m.settleAt=action and s.lastActionAt or now;m.spent=action and s.lastActionKey or nil
+        m.settleAt=action and s.lastActionAt or now
+        m.spent=completed and carry.key or action and s.lastActionKey or nil
     end
     m.seen=true;m.serial=s.actionSerial;m.gcd=s.gcd;m.gcdStart=s.gcdStart
     if not s.target or s.casting then m.item=nil;m.waiting=nil;return Copy(raw) end

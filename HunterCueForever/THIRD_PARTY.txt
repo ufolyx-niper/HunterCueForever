@@ -1,0 +1,26 @@
+HunterCue Forever 1.4.0 is distributed as a combined work under GPL-2.0-only.
+Complete editable Lua source accompanies the installation ZIP. No warranty.
+The original HunterCue MIT modules retain their MIT notices and permission;
+see LICENSE-HunterCue-MIT. Copyright (c) 2026 ufolyx-niper.
+
+Sting.lua was adapted from SerpentStingHint 0.1.4 (GPL-2.0-only),
+https://github.com/ufolyx-niper/SerpentStingHint/tree/v0.1.4
+Changed 2026-11-22 by ufolyx-niper: unified HunterCue settings, isolated module
+lifecycle, native cooldown sweep instead of text, plain icons instead of borders,
+shared persistent editing controls, independent coordinates and duplicate guard.
+
+Native aura clipping derives from EverAuras (GPL version 2), Hackblarvest:
+https://github.com/Hackblarvest/EverAuras/tree/014c64f6116362f7a9e1da9e450367f42616a937
+ForeverEngineAura.lua. GPL text is supplied in LICENSE.
+
+Health-curve projection derives from Last Breath Forever (MIT):
+https://github.com/KesaObscura/LastBreathForever/tree/c86f41c93865867d3519acb6ee845f9d0ab7cd88
+Copyright (c) 2026 KesaObscura. Full notice: LICENSE-LastBreathForever.
+
+Native AuraContainer usage was also researched in Musca Auras (GPL version 2):
+https://github.com/dldvlpr-addons-wow/Musca-Auras/tree/b7109e439f77033ca4cefb0b8cc17b94c3b04095
+
+Blizzard API reference only (no Blizzard source copied into this package):
+https://github.com/Gethe/wow-ui-source/tree/forever
+CustomAuraButtonSharedMixin:SetDurationCooldown delegates duration drawing to
+the native engine. The addon does not decode protected aura or health values.
