@@ -2,10 +2,10 @@
 local _,ns=...
 ns.optionViews={}
 local enums={spec={"auto","bm","mm","sv"},mode={"balanced","conserve","burst"},
-    targets={1,3,6},visibility={"always","target","combat"},weave={"normal","aggressive"},markReminder={"off","priority","all"}}
-local labels={auto="自动识别",bm="兽王",mm="射击",sv="生存 weaving",balanced="均衡",conserve="省蓝",burst="全力",
+    targets={1,3,6},visibility={"always","target","combat"},weave={"normal","aggressive"},markReminder={"off","priority","all"},burstDirection={"right","left"}}
+local labels={right="向右展开",left="向左展开",auto="自动识别",bm="兽王",mm="射击",sv="生存 weaving",balanced="均衡",conserve="省蓝",burst="全力",
     always="始终显示",target="有敌对目标时",combat="仅战斗中",normal="常规穿插",aggressive="积极穿插",off="关闭",priority="精英 / 首领（推荐）",all="所有敌对目标",[1]="单体",[3]="3+ 目标",[6]="6+ 目标"}
-local layoutFields={x=true,y=true,mainSize=true,burstSize=true,burstSpacing=true,rowGap=true,locked=true,stingSize=true,stingX=true,stingY=true}
+local layoutFields={x=true,y=true,mainSize=true,burstSize=true,burstSpacing=true,rowGap=true,locked=true,stingSize=true,stingX=true,stingY=true,burstDirection=true}
 for key in pairs(ns.positionKeys) do layoutFields[key]=true end
 local function ValidNumber(v) return type(v)=="number" and v==v and math.abs(v)<1e10 end
 local function Refresh()
@@ -17,12 +17,15 @@ function ns.SetPosition(x,y)
     ns.SavePosition(x,y);ns.resetArmed=false;Refresh();return true
 end
 function ns.SetOption(key,value)
-    if ns.defaults[key]==nil or key=="layoutVersion" or key=="displayVersion" or key=="iconLayoutVersion" or key=="auxiliaryLayoutVersion" then return false end
+    if ns.defaults[key]==nil or key=="layoutVersion" or key=="displayVersion" or key=="iconLayoutVersion" or key=="auxiliaryLayoutVersion" or key=="groupLayoutVersion" then return false end
     if layoutFields[key] and ns.LayoutLockedByCombat() then return false end
     if type(value)~=type(ns.defaults[key]) then return false end
     if ns.optionBounds[key] then local b=ns.optionBounds[key];if not ValidNumber(value) or value<b[1] or value>b[2] then return false end end
     if enums[key] then local found=false;for _,v in ipairs(enums[key]) do if v==value then found=true end end;if not found then return false end end
     if ns.optionBounds[key] and not ns.positionKeys[key] then value=math.floor(value+0.5) end
+    if (key=="burstX" or key=="burstY") and ns.db.groupLayoutVersion~=1 then
+        ns.db.burstX,ns.db.burstY=ns.GroupOrigin(ns.db,ns.known);ns.db.groupLayoutVersion=1
+    end
     ns.db[key]=value;ns.resetArmed=false
     if key=="spec" or key=="weave" then ns.ResetTracking() end
     Refresh();return true
@@ -30,12 +33,15 @@ end
 function ns.ResetLayout()
     if ns.LayoutLockedByCombat() then return false end
     for _,k in ipairs(ns.layoutKeys) do ns.db[k]=ns.defaults[k] end
-    ns.db.auxiliaryLayoutVersion=0
+    ns.db.auxiliaryLayoutVersion=0;ns.db.groupLayoutVersion=0
     ns.resetArmed=false;Refresh();return true
 end
 function ns.ArrangeSmallIcons()
     if ns.LayoutLockedByCombat() then return false end
-    ns.ArrangeAuxiliary(ns.db,ns.known,false);Refresh();return true
+    local l=ns.GroupLayout(ns.db,#ns.ReminderSlots(ns.db,ns.known))
+    ns.db.burstX=ns.db.x+l.firstOffset
+    ns.db.burstY=ns.db.y-ns.db.mainSize/2-ns.db.rowGap-ns.db.burstSize/2
+    ns.db.groupLayoutVersion=1;Refresh();return true
 end
 function ns.ResetAll()
     if not ns.resetArmed or ns.LayoutLockedByCombat() then return false end
@@ -82,11 +88,11 @@ local function BuildCanvas(parent)
     local panel=CreateFrame("Frame",nil,parent);panel:Hide()
     local scroll=CreateFrame("ScrollFrame",nil,panel,"UIPanelScrollFrameTemplate")
     scroll:SetPoint("TOPLEFT",0,0);scroll:SetPoint("BOTTOMRIGHT",-28,0)
-    local content=CreateFrame("Frame",nil,scroll);content:SetSize(560,2070);scroll:SetScrollChild(content)
+    local content=CreateFrame("Frame",nil,scroll);content:SetSize(560,2234);scroll:SetScrollChild(content)
     local v={panel=panel,controls={},layoutControls={},numericControls={},refreshing=false};ns.optionViews[#ns.optionViews+1]=v
     local c=v.controls
     Text(content,"HunterCue Forever · 设置",16,12,520,20,28)
-    Text(content,"纯图标 HUD。每个图标可单独拖动；/hcf 或脱战右键主/爆发/印记打开设置。",16,46,520,12,32)
+    Text(content,"三个独立区域：主推荐、爆发/印记整组、毒蛇。/hcf 随时打开设置。",16,46,520,12,32)
     Text(content,"显示与布局",16,88,520,16)
     local function Check(key,label,y,layout)
         local b=CreateFrame("CheckButton",nil,content,"UICheckButtonTemplate")
@@ -101,6 +107,21 @@ local function BuildCanvas(parent)
             for i,value in ipairs(values) do if ns.db[key]==value then idx=i%#values+1;break end end
             ns.SetOption(key,values[idx])
         end)
+    end
+    local function NumberField(key,label,y)
+        Text(content,label,16,y+3,340,12)
+        local b=CreateFrame("EditBox",nil,content,"InputBoxTemplate")
+        b:SetPoint("TOPLEFT",370,-y);b:SetSize(160,26);b:SetAutoFocus(false);b:SetMaxLetters(12)
+        b:SetScript("OnTextChanged",function(self,userInput) if userInput then self.inputDirty=true end end)
+        local function Save(self)
+            if v.refreshing or not self.inputDirty then return end
+            self.inputDirty=false
+            ns.SetOption(key,tonumber(self:GetText()));ns.RefreshOptions()
+        end
+        b:SetScript("OnEnterPressed",function(self) Save(self);self:ClearFocus() end)
+        b:SetScript("OnEditFocusLost",Save)
+        b:SetScript("OnEscapePressed",function(self) self.inputDirty=false;self:SetText(tostring(ns.db[key]));self:ClearFocus() end)
+        c[key]=b;v.numericControls[#v.numericControls+1]=b
     end
     Check("enabled","显示 HUD（隐藏后仍可用 /hcf 打开设置）",112)
     Check("locked","锁定 HUD 位置（取消锁定后在预览中拖动）",146,true)
@@ -121,11 +142,12 @@ local function BuildCanvas(parent)
         c[key]=b;c[key.."Label"]=number;v.layoutControls[#v.layoutControls+1]=b
     end
     Slider("mainSize","主推荐图标大小 · 24–160 px",225,24,160,1)
-    Slider("burstSize","下方提醒图标大小 · 12–96 px",285,12,96,1)
-    Slider("burstSpacing","排列横向间隔 · 0–40 px（点击一键排列应用）",345,0,40,1)
-    Slider("rowGap","排列上下距离 · 0–80 px（点击一键排列应用）",405,0,80,1)
-    Text(content,"大图标位置；小图标可逐个拖动",16,471,290,12)
-    c.arrange=Button(content,"一键排列小图标",320,463,216,ns.ArrangeSmallIcons)
+    Slider("burstSize","爆发/印记组图标大小 · 12–96 px",285,12,96,1)
+    Slider("burstSpacing","组内图标间隔 · 0–40 px（立即生效）",345,0,40,1)
+    Choice("burstDirection","爆发/印记组展开方向",405)
+    v.layoutControls[#v.layoutControls+1]=c.burstDirection
+    Text(content,"主推荐位置（爆发组和毒蛇分别拖动）",16,471,290,12)
+    c.arrange=Button(content,"整组移到主图标下方",320,463,216,ns.ArrangeSmallIcons)
     v.layoutControls[#v.layoutControls+1]=c.arrange
     local function Edit(key,x)
         Text(content,key:upper(),x,504,20,12)
@@ -165,57 +187,47 @@ local function BuildCanvas(parent)
     Check("burstRacial","巨魔：狂暴",1070)
     Check("burstRapid","急速射击",1104)
     Check("burstWrath","兽王：狂野怒火",1138)
-    Text(content,"已学会且自身冷却就绪时提醒；公共CD期间保留就绪图标。\n自身冷却、资源不足或无法确认状态时隐藏；狂野怒火需存活宠物。\n图标不是立即可施放的保证，其他限制仍以游戏为准。",16,1172,520,11,52)
-    Text(content,"猎人印记 · 独立提醒，不进入常规大图标",16,1250,520,16)
-    Choice("markReminder","印记提醒范围",1286)
-    Check("markInCombat","战斗中也提醒（默认关闭，避免切怪时催促转标）",1324)
-    Text(content,"默认仅对尚未战斗的精英/首领提醒。已有任何猎人印记、状态未知时不亮。\n此提醒不受爆发栏总开关控制；“仅战斗显示”会隐藏默认的开怪前提醒。\n所有图标仅作提示，仍需自己按技能；不会自动转移或覆盖印记。",16,1358,520,11,64)
-    Text(content,"毒蛇钉刺 · 独立监控",16,1450,520,16)
-    Check("stingEnabled","启用毒蛇监控（不进入常规大图标）",1482)
-    Check("stingIdle","没有补钉刺提示时保留灰色图标（默认隐藏）",1516)
-    Slider("stingSize","毒蛇图标大小 · 16–128 px",1554,16,128,1)
-    local function NumberField(key,label,y)
-        Text(content,label,16,y+3,340,12)
-        local b=CreateFrame("EditBox",nil,content,"InputBoxTemplate")
-        b:SetPoint("TOPLEFT",370,-y);b:SetSize(160,26);b:SetAutoFocus(false);b:SetMaxLetters(12)
-        b:SetScript("OnTextChanged",function(self,userInput) if userInput then self.inputDirty=true end end)
-        local function Save(self)
-            if v.refreshing or not self.inputDirty then return end
-            self.inputDirty=false
-            ns.SetOption(key,tonumber(self:GetText()));ns.RefreshOptions()
-        end
-        b:SetScript("OnEnterPressed",function(self) Save(self);self:ClearFocus() end)
-        b:SetScript("OnEditFocusLost",Save)
-        b:SetScript("OnEscapePressed",function(self) self.inputDirty=false;self:SetText(tostring(ns.db[key]));self:ClearFocus() end)
-        c[key]=b;v.numericControls[#v.numericControls+1]=b
-    end
-    NumberField("stingX","毒蛇 X · -4000 至 4000",1618)
-    NumberField("stingY","毒蛇 Y · -4000 至 4000",1656)
-    NumberField("stingRefreshTime","预计剩余击杀时间门槛 · 1–60 秒",1694)
-    Check("stingOpening","估不出存活时间时启用开怪血量规则",1732)
-    NumberField("stingOpeningHealth","开怪当前血量门槛 · 1–10000000",1770)
-    Check("stingSkipElementals","跳过元素生物的补钉刺提醒（按类别，非免疫判断）",1810)
-    Text(content,"灰色 + 转圈：已有你的钉刺；亮色：缺失且值得补。无数字/边框。\n只监控当前敌对目标，可单独拖动。关闭设置后仍可继续定位。\n开怪默认血量 5000，估算存活默认 10 秒；不是必中或 DPS 保证。",16,1848,520,11,64)
-    c.stingStatus=Text(content,"",16,1920,520,11,48)
-    c.reset=Button(content,"重置全部设置…",16,1990,250,function()
+    Check("burstGlow","爆发就绪时发光（狂暴 / 急速射击 / 狂野怒火）",1172)
+    NumberField("burstX","爆发组起点 X · 第一个图标中心",1268)
+    NumberField("burstY","爆发组起点 Y · 第一个图标中心",1306)
+    Text(content,"已学会且自身冷却就绪时提醒；公共CD期间保留就绪图标。\n自身冷却、资源不足或无法确认状态时隐藏；狂野怒火需存活宠物。\n图标不是立即可施放的保证，其他限制仍以游戏为准。",16,1206,520,11,52)
+    Text(content,"猎人印记 · 独立提醒，不进入常规大图标",16,1380,520,16)
+    Choice("markReminder","印记提醒范围",1416)
+    Check("markInCombat","战斗中也提醒（默认关闭，避免切怪时催促转标）",1454)
+    Text(content,"默认仅对尚未战斗的精英/首领提醒。已有任何猎人印记、状态未知时不亮。\n此提醒不受爆发栏总开关控制；“仅战斗显示”会隐藏默认的开怪前提醒。\n所有图标仅作提示，仍需自己按技能；不会自动转移或覆盖印记。",16,1488,520,11,64)
+    Text(content,"毒蛇钉刺 · 独立监控",16,1580,520,16)
+    Check("stingEnabled","启用毒蛇监控（不进入常规大图标）",1612)
+    Check("stingIdle","没有补钉刺提示时保留灰色图标（默认隐藏）",1646)
+    Check("stingGlow","值得补毒蛇时发光（沿用存活时间 / 开怪血量规则）",1680)
+    Slider("stingSize","毒蛇图标大小 · 16–128 px",1718,16,128,1)
+    NumberField("stingX","毒蛇 X · -4000 至 4000",1782)
+    NumberField("stingY","毒蛇 Y · -4000 至 4000",1820)
+    NumberField("stingRefreshTime","预计剩余击杀时间门槛 · 1–60 秒",1858)
+    Check("stingOpening","估不出存活时间时启用开怪血量规则",1896)
+    NumberField("stingOpeningHealth","开怪当前血量门槛 · 1–10000000",1934)
+    Check("stingSkipElementals","跳过元素生物的补钉刺提醒（按类别，非免疫判断）",1974)
+    Text(content,"灰色 + 转圈：已有你的钉刺；亮色/发光：缺失且值得补。无数字。\n只监控当前敌对目标，可单独拖动。关闭设置后仍可继续定位。\n开怪默认血量 5000，估算存活默认 10 秒；不是必中或 DPS 保证。",16,2012,520,11,64)
+    c.stingStatus=Text(content,"",16,2084,520,11,48)
+    c.reset=Button(content,"重置全部设置…",16,2154,250,function()
         if ns.LayoutLockedByCombat() then return end
         if ns.resetArmed then ns.ResetAll() else ns.resetArmed=true;ns.RefreshOptions() end
     end);v.layoutControls[#v.layoutControls+1]=c.reset
-    v.status=Text(content,"",16,2026,520,12,42)
+    v.status=Text(content,"",16,2190,520,12,42)
     function v.Refresh()
         v.refreshing=true
-        for _,k in ipairs({"enabled","locked","cooldowns","traps","markInCombat","stableRecommendations","burstRacial","burstRapid","burstWrath","stingEnabled","stingIdle","stingOpening","stingSkipElementals"}) do c[k]:SetChecked(ns.db[k]) end
+        for _,k in ipairs({"enabled","locked","cooldowns","traps","markInCombat","stableRecommendations","burstRacial","burstRapid","burstWrath","stingEnabled","stingIdle","stingOpening","stingSkipElementals","burstGlow","stingGlow"}) do c[k]:SetChecked(ns.db[k]) end
         for k in pairs(enums) do c[k]:SetText(labels[ns.db[k]]) end
-        for _,k in ipairs({"mainSize","burstSize","burstSpacing","rowGap","stingSize"}) do c[k]:SetValue(ns.db[k]);c[k.."Label"]:SetText(ns.db[k].." px") end
+        for _,k in ipairs({"mainSize","burstSize","burstSpacing","stingSize"}) do c[k]:SetValue(ns.db[k]);c[k.."Label"]:SetText(ns.db[k].." px") end
         c.x:SetText(string.format("%.1f",ns.db.x));c.y:SetText(string.format("%.1f",ns.db.y))
-        for _,k in ipairs({"stingX","stingY","stingRefreshTime","stingOpeningHealth"}) do
+        for _,k in ipairs({"burstX","burstY","stingX","stingY","stingRefreshTime","stingOpeningHealth"}) do
             c[k].inputDirty=false
             c[k]:SetText(ns.positionKeys[k] and string.format("%.1f",ns.db[k]) or tostring(ns.db[k]))
         end
         c.stingStatus:SetText(ns.stingConflict and "旧 Serpent Sting Hint 正在运行：内置监控已暂停，请停用旧插件并 /reload。"
             or ns.stingUnsupported and "当前客户端原生减益接口不可用，毒蛇监控已停用；常规循环不受影响。"
             or ns.stingInitialized and not ns.stingEstimatorReady and "可显示已有钉刺，但健康曲线接口不可用，无法估算补钉刺提醒。"
-            or "原毒蛇插件的设置不会被删除；合并版选项独立保存。总显隐也适用于毒蛇。")
+            or ns.glowUnavailable and "原生发光模板不可用：普通图标照常提醒，条件不变。"
+            or "高亮沿用原补毒蛇规则；不是目标缺失就亮。总显隐也适用于毒蛇。")
         local combat=ns.LayoutLockedByCombat()
         for _,b in ipairs(v.layoutControls) do b:SetEnabled(not combat) end
         for _,b in ipairs(v.numericControls) do

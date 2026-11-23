@@ -1,5 +1,6 @@
 -- SPDX-License-Identifier: GPL-2.0-only
 -- Modified 2026-11-22 by ufolyx-niper: HunterCue integration and pure-icon monitoring.
+-- Modified 2026-11-23: conditional native glow, padded mask and transition-only opening visibility.
 -- Aura clipping after EverAuras, and health-curve projection after Last Breath Forever.
 -- Adapted from SerpentStingHint 0.1.4. See THIRD_PARTY.txt and the accompanying licenses.
 local addon, ns = ...
@@ -8,6 +9,7 @@ function ns.InitSting()
 if ns.stingAnchor then return end
 
 local ICON_SIZE = 44
+local GLOW_PAD = 10 -- 1.4x native glow fits inside the 64px missing-aura mask.
 local SPELL_ICON = "Interface\\Icons\\Ability_Hunter_Quickshot"
 local STING_RANKS = {
     [1978] = true, [13549] = true, [13550] = true, [13551] = true, [13552] = true,
@@ -42,7 +44,12 @@ local initialized, unsupported, estimatorReady
 local timerContainer, missingContainer
 local missingClip, targetCreatureType
 local openingHighlight, openingEndsAt, targetMaxHealth
+local openingShown=false
+local highlights={}
 local neutral
+local function SetOpeningShown(shown)
+    if openingHighlight and openingShown~=shown then openingShown=shown;openingHighlight:SetShown(shown) end
+end
 
 local function IsSecret(value)
     return issecretvalue and issecretvalue(value)
@@ -85,7 +92,7 @@ local function CheckLegacy()
     end
 end
 local function Place(frame)
-    local size=ns.db.stingSize
+    local size=ns.db.stingSize*1.4 -- Reserve glow overhang even when disabled; toggles do not nudge the anchor.
     local mx=math.max(0,(UIParent:GetWidth()-size)/2)
     local my=math.max(0,(UIParent:GetHeight()-size)/2)
     frame:ClearAllPoints()
@@ -94,6 +101,7 @@ end
 function ns.UpdateStingPreview()
     local editing=ns.preview==true and not ns.LayoutLockedByCombat()
     preview:SetShown(editing and ns.db.stingEnabled and not ns.stingConflict)
+    ns.SetGlow(preview,editing and ns.db.stingEnabled and not ns.stingConflict and ns.db.stingGlow,ns.db.stingSize)
     preview:EnableMouse(editing and not ns.db.locked)
     anchor:SetShown(not editing)
     if not ns.LayoutLockedByCombat() and not dragging then
@@ -127,6 +135,7 @@ local function ApplySettings()
     end
     ns.UpdateStingPreview()
     if neutral then neutral:SetShown(ns.db.stingIdle) end
+    for _,frame in ipairs(highlights) do ns.SetGlow(frame,ns.db.stingGlow,ICON_SIZE) end
     if RefreshTarget then RefreshTarget() end
 end
 function ns.ApplySting()
@@ -146,6 +155,7 @@ local function NewIcon(parent)
 end
 
 NewIcon(preview)
+ns.CreateGlow(preview,ns.db.stingSize)
 
 local function NewAuraContainer()
     local container = CreateFrame("AuraContainer", nil, root, "CustomAuraContainerTemplate")
@@ -181,12 +191,13 @@ local function BuildAuraDisplay()
     tracker:SetEnabled(true)
 
     local indicator = NewAuraContainer()
+    indicator:ClearAllPoints();indicator:SetPoint("TOPLEFT",root,"TOPLEFT",-GLOW_PAD,GLOW_PAD)
     indicator:AddAuraGroup("sting-missing", FILTER, {
         candidateFilters = { includeSpellIDs = STING_RANKS },
         maxFrameCount = 1,
-        layout = { elementWidth = ICON_SIZE + 1, elementHeight = ICON_SIZE },
+        layout = { elementWidth = ICON_SIZE + 2*GLOW_PAD + 1, elementHeight = ICON_SIZE + 2*GLOW_PAD },
         initializeFrame = function(button)
-            button:SetSize(ICON_SIZE + 1, ICON_SIZE)
+            button:SetSize(ICON_SIZE + 2*GLOW_PAD + 1, ICON_SIZE + 2*GLOW_PAD)
             button:SetMouseClickEnabled(false)
             button:EnableMouseMotion(false)
         end,
@@ -194,12 +205,12 @@ local function BuildAuraDisplay()
     indicator:SetUnit("target")
     indicator:SetEnabled(true)
 
-    -- The engine gives the group width 1 when empty, or ICON_SIZE + 1 when occupied.
+    -- Engine width: 1 empty, 65 occupied. Clip spans [-10,54] empty, width 0 occupied.
     local missingClip = CreateFrame("Frame", nil, root, LAYOUT_TEMPLATE)
     missingClip:SetFrameLevel(root:GetFrameLevel() + 1)
     missingClip:SetClipsChildren(true)
     missingClip:SetPoint("TOPLEFT", indicator, "TOPRIGHT", -1, 0)
-    missingClip:SetPoint("BOTTOMRIGHT", root, "BOTTOMRIGHT")
+    missingClip:SetPoint("BOTTOMRIGHT", root, "BOTTOMRIGHT",GLOW_PAD,-GLOW_PAD)
     timerContainer, missingContainer = tracker, indicator
     return missingClip
 end
@@ -214,6 +225,8 @@ local function NewHighlight(parent)
     local highlight = CreateFrame("Frame", nil, parent, LAYOUT_TEMPLATE)
     highlight:SetAllPoints(root)
     NewIcon(highlight)
+    highlights[#highlights+1]=highlight
+    ns.CreateGlow(highlight,ICON_SIZE)
     return highlight
 end
 
@@ -247,7 +260,7 @@ end
 
 local function ResetSample()
     HideEstimates()
-    if openingHighlight then openingHighlight:Hide() end
+    SetOpeningShown(false)
     sampleTime, lastHit, hits = nil, nil, 0
 end
 
@@ -292,17 +305,16 @@ local function UpdateEstimate(now)
     local openingThreshold = OpeningThreshold(now)
     local elapsed = sampleTime and now - sampleTime
     if not elapsed or hits < MIN_HITS or elapsed < MIN_TIME then
-        openingHighlight:Hide()
+        SetOpeningShown(openingThreshold~=nil)
         if openingThreshold then
             thresholdCurve:ClearPoints()
             thresholdCurve:AddPoint(0, transparent)
             thresholdCurve:AddPoint(openingThreshold, opaque)
             ApplyHealthCurve(openingHighlight, thresholdCurve)
-            openingHighlight:Show()
         end
         return
     end
-    openingHighlight:Hide()
+    SetOpeningShown(false)
 
     local refreshTime = ns.db.stingRefreshTime
     for _, gate in ipairs(sampleGates) do

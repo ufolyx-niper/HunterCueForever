@@ -1,7 +1,7 @@
 -- SPDX-License-Identifier: MIT
 -- Icon-only surface. All instructions and diagnostics belong to Options/chat.
 local _,ns=...
-local root,mainButton,icon,cd
+local root,group,mainButton,icon,cd
 local buttons,slots={},{}
 local layout
 local lastState,lastOutput={},{}
@@ -15,6 +15,8 @@ local function Render()
     local visible=ns.ShouldShow(ns.db,lastState,preview) and (not renderFault or preview)
     root:SetFrameStrata(preview and "DIALOG" or "MEDIUM")
     root:SetShown(visible)
+    group:SetFrameStrata(preview and "DIALOG" or "MEDIUM")
+    group:SetShown(visible and #slots>0);group:EnableMouse(preview)
     root:EnableMouse(preview)
     local key=preview and "arcane" or lastOutput.key
     if key=="mark" or key=="sting" or key=="auto" then key=nil end
@@ -35,27 +37,32 @@ local function Render()
         local b=buttons[k]
         local shown=visible and enabled[k] and (preview or ready[k]==true) or false
         b:SetFrameStrata(preview and "DIALOG" or "MEDIUM")
-        b:SetShown(shown);b:EnableMouse(shown and (preview or not lastState.inCombat))
+        b:SetShown(shown);b:EnableMouse(shown and not preview and not lastState.inCombat)
         if shown then b.icon:SetTexture(ns.SpellIcon(k)) end
+        if ns.burstOption[k] then ns.SetGlow(b,shown and ns.db.burstGlow,b.visualSize or ns.db.burstSize) end
     end
 end
 function ns.ApplyUI()
     if not root then return end
-    ns.MigrateAuxiliary()
-    slots=ns.ReminderSlots(ns.db,ns.known);layout=ns.IconLayout(ns.db,0);ns.hudLayout=layout
+    ns.MigrateGroup()
+    layout=ns.IconLayout(ns.db,0);ns.hudLayout=layout
     root:SetSize(layout.width,layout.height)
     local x,y,fit,ax,ay=ns.LayoutGeometry(ns.db,UIParent:GetWidth(),UIParent:GetHeight(),layout)
     ns.appliedX=x;ns.appliedY=y;ns.appliedScale=fit
     if not ns.dragging then root:SetScale(fit);root:ClearAllPoints();root:SetPoint("CENTER",UIParent,"CENTER",ax,ay) end
     mainButton:SetSize(ns.db.mainSize,ns.db.mainSize);mainButton:ClearAllPoints()
     mainButton:SetPoint("TOPLEFT",root,"TOPLEFT",layout.mainX,0)
-    for _,k in ipairs(ns.reminderOrder) do
-        local b=buttons[k]
-        if not b.dragging then
-            b:SetSize(ns.db.burstSize,ns.db.burstSize)
-            local db={mainSize=ns.db.burstSize,rowGap=0,x=ns.db[k.."X"],y=ns.db[k.."Y"]}
-            local _,_,scale,x,y=ns.LayoutGeometry(db,UIParent:GetWidth(),UIParent:GetHeight(),ns.IconLayout(db,0))
-            b:SetScale(scale);b:ClearAllPoints();b:SetPoint("CENTER",UIParent,"CENTER",x,y)
+    if not ns.groupDragging then
+        slots=ns.ReminderSlots(ns.db,ns.known)
+        local gl=ns.GroupLayout(ns.db,#slots);ns.groupLayout=gl
+        local gx,gy=ns.GroupOrigin(ns.db,ns.known)
+        local x,y,scale,ax,ay=ns.GroupGeometry(gx,gy,UIParent:GetWidth(),UIParent:GetHeight(),gl)
+        ns.groupAppliedX=x;ns.groupAppliedY=y;ns.groupAppliedScale=scale
+        group:SetSize(gl.width,gl.height);group:SetScale(scale);group:ClearAllPoints()
+        group:SetPoint("CENTER",UIParent,"CENTER",ax,ay)
+        for i,k in ipairs(slots) do
+            local b=buttons[k];b.visualSize=gl.size;b:SetSize(gl.size,gl.size);b:ClearAllPoints()
+            b:SetPoint("CENTER",group,"CENTER",gl.firstOffset+gl.dir*(i-1)*gl.pitch,0)
         end
     end
     if ns.ApplySting then ns.ApplySting() end
@@ -63,9 +70,7 @@ function ns.ApplyUI()
 end
 local function AbortDrag()
     if ns.dragging then root:StopMovingOrSizing();root:SetUserPlaced(false);ns.dragging=false;ns.ApplyUI() end
-    for _,b in pairs(buttons) do
-        if b.dragging then b:StopMovingOrSizing();b:SetUserPlaced(false);b.dragging=false;ns.ApplyUI() end
-    end
+    if ns.groupDragging then group:StopMovingOrSizing();group:SetUserPlaced(false);ns.groupDragging=false;ns.ApplyUI() end
 end
 function ns.EndPreview()
     ns.preview=false;AbortDrag()
@@ -74,7 +79,7 @@ function ns.EndPreview()
 end
 function ns.FinishPreview()
     if ns.dragging then root:GetScript("OnDragStop")(root) end
-    for _,b in pairs(buttons) do if b.dragging then b:GetScript("OnDragStop")(b) end end
+    if ns.groupDragging then group:GetScript("OnDragStop")(group) end
     if ns.StopStingDrag then ns.StopStingDrag(true) end
     ns.EndPreview()
     if ns.RefreshOptions then ns.RefreshOptions() end
@@ -107,26 +112,28 @@ function ns.CreateUI()
     icon=mainButton:CreateTexture(nil,"ARTWORK");mainButton.icon=icon;icon:SetAllPoints(mainButton);icon:SetTexCoord(.08,.92,.08,.92)
     cd=CreateFrame("Cooldown",nil,mainButton,"CooldownFrameTemplate");cd:SetAllPoints(mainButton);ns.mainCooldown=cd
     cd.noCooldownCount=true;cd:SetHideCountdownNumbers(true);cd:SetDrawEdge(false);cd:SetDrawBling(false)
+    group=CreateFrame("Frame","HunterCueForeverBurstGroup",UIParent);ns.burstGroup=group
+    group:SetMovable(true);group:SetUserPlaced(false);group:SetClampedToScreen(true);group:RegisterForDrag("LeftButton")
+    group:SetScript("OnDragStart",function()
+        if ns.preview and not ns.db.locked and not ns.LayoutLockedByCombat() then ns.groupDragging=true;group:StartMoving() end
+    end)
+    group:SetScript("OnDragStop",function()
+        if not ns.groupDragging then return end
+        if ns.LayoutLockedByCombat() then AbortDrag();return end
+        group:StopMovingOrSizing();group:SetUserPlaced(false);ns.groupDragging=false
+        local x,y=group:GetCenter();local px,py=UIParent:GetCenter()
+        if x and y and px and py then
+            x,y=ns.CenterToParent(x,y,group:GetEffectiveScale(),UIParent:GetEffectiveScale(),px,py)
+            ns.db.burstX=math.max(-4000,math.min(4000,x+ns.groupLayout.firstOffset*ns.groupAppliedScale))
+            ns.db.burstY=math.max(-4000,math.min(4000,y))
+            ns.db.groupLayoutVersion=1 -- A deliberate drag overrides any still-pending automatic migration.
+        end
+        ns.ApplyUI();if ns.RefreshOptions then ns.RefreshOptions() end
+    end)
     for _,key in ipairs(ns.reminderOrder) do
-        local b=CreateFrame("Button",nil,UIParent);b:RegisterForClicks("RightButtonUp");b:SetScript("OnClick",OpenSettings)
-        b.dragging=false
-        b:SetMovable(true);b:SetUserPlaced(false);b:SetClampedToScreen(true);b:RegisterForDrag("LeftButton")
-        b:SetScript("OnDragStart",function()
-            if ns.preview and not ns.db.locked and not ns.LayoutLockedByCombat() then b.dragging=true;b:StartMoving() end
-        end)
-        b:SetScript("OnDragStop",function()
-            if not b.dragging then return end
-            if ns.LayoutLockedByCombat() then AbortDrag();return end
-            b:StopMovingOrSizing();b:SetUserPlaced(false);b.dragging=false
-            local x,y=b:GetCenter();local px,py=UIParent:GetCenter()
-            if x and y and px and py then
-                x,y=ns.CenterToParent(x,y,b:GetEffectiveScale(),UIParent:GetEffectiveScale(),px,py)
-                ns.db[key.."X"]=math.max(-4000,math.min(4000,x))
-                ns.db[key.."Y"]=math.max(-4000,math.min(4000,y))
-            end
-            ns.ApplyUI();if ns.RefreshOptions then ns.RefreshOptions() end
-        end)
+        local b=CreateFrame("Button",nil,group);b:RegisterForClicks("RightButtonUp");b:SetScript("OnClick",OpenSettings)
         b.icon=b:CreateTexture(nil,"ARTWORK");b.icon:SetAllPoints(b);b.icon:SetTexCoord(.08,.92,.08,.92)
+        if ns.burstOption[key] then ns.CreateGlow(b,ns.db.burstSize) end
         b:Hide();buttons[key]=b
     end
     ns.burstButtons=buttons;ns.ApplyUI()
@@ -140,5 +147,10 @@ function ns.ShowError()
     renderFault=true
     if ns.preview then Render();return end
     lastOutput={}
-    if root then root:Hide();mainButton:Hide();cd:Clear();for _,b in pairs(buttons) do b:Hide() end end
+    if root then
+        root:Hide();group:Hide();mainButton:Hide();cd:Clear()
+        for key,b in pairs(buttons) do
+            b:Hide();if ns.burstOption[key] then ns.SetGlow(b,false,b.visualSize or ns.db.burstSize) end
+        end
+    end
 end

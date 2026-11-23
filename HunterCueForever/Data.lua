@@ -1,6 +1,6 @@
 -- SPDX-License-Identifier: MIT
 local _, ns = ...
-ns.version = "1.5.0"
+ns.version = "1.6.0"
 -- Rank order is explicit. Spell IDs are facts checked against WoWSims Forever
 -- 00fecd9c spell_data_auto_gen.go; never sort by ID or localized rank text.
 ns.spells = {
@@ -33,6 +33,7 @@ ns.family = {hawk={"hawk","arcane"}, arcane={"hawk","arcane"},
 ns.defaults = {spec="auto", mode="balanced", targets=1, cooldowns=true,
     traps=false, weave="normal", enabled=true, locked=false, x=36, y=-80,
     mainSize=56,burstSize=32,burstSpacing=8,rowGap=12,iconLayoutVersion=1,
+    burstX=-24,burstY=-136,burstDirection="right",groupLayoutVersion=0,burstGlow=true,stingGlow=true,
     visibility="target",layoutVersion=2,displayVersion=2,
     stableRecommendations=true,burstRacial=true,burstRapid=true,burstWrath=true,
     markReminder="priority",markInCombat=false,
@@ -41,8 +42,9 @@ ns.defaults = {spec="auto", mode="balanced", targets=1, cooldowns=true,
 ns.optionBounds={mainSize={24,160},burstSize={12,96},burstSpacing={0,40},rowGap={0,80},x={-4000,4000},y={-4000,4000}}
 ns.optionBounds.stingX={-4000,4000};ns.optionBounds.stingY={-4000,4000};ns.optionBounds.stingSize={16,128}
 ns.optionBounds.stingRefreshTime={1,60};ns.optionBounds.stingOpeningHealth={1,10000000}
-ns.layoutKeys={"x","y","mainSize","burstSize","burstSpacing","rowGap","stingX","stingY","stingSize"}
-ns.positionKeys={x=true,y=true,stingX=true,stingY=true}
+ns.optionBounds.burstX={-4000,4000};ns.optionBounds.burstY={-4000,4000}
+ns.layoutKeys={"x","y","mainSize","burstSize","burstSpacing","rowGap","stingX","stingY","stingSize","burstX","burstY","burstDirection"}
+ns.positionKeys={x=true,y=true,stingX=true,stingY=true,burstX=true,burstY=true}
 for i,key in ipairs(ns.reminderOrder) do
     for _,axis in ipairs({"X","Y"}) do
         local field=key..axis
@@ -65,6 +67,8 @@ function ns.Settings(raw)
     if out.targets~=1 and out.targets~=3 and out.targets~=6 then out.targets=1 end
     if out.weave~="normal" and out.weave~="aggressive" then out.weave="normal" end
     if out.markReminder~="off" and out.markReminder~="priority" and out.markReminder~="all" then out.markReminder="priority" end
+    if out.burstDirection~="left" and out.burstDirection~="right" then out.burstDirection="right" end
+    out.groupLayoutVersion=raw.groupLayoutVersion==1 and 1 or 0
     local function Number(v,fallback)
         if type(v)~="number" or v~=v or math.abs(v)==math.huge then return fallback end
         return v
@@ -131,6 +135,36 @@ function ns.MigrateAuxiliary()
     if ns.db.auxiliaryLayoutVersion==1 then return end
     if not ns.scanComplete or ns.scanPending or ns.LayoutLockedByCombat() then return end
     ns.ArrangeAuxiliary(ns.db,ns.known,true);ns.db.auxiliaryLayoutVersion=1
+end
+function ns.GroupLayout(db,count)
+    local size=db.burstSize;local pitch=size+db.burstSpacing
+    local span=count>0 and count*size+(count-1)*db.burstSpacing or size
+    local dir=db.burstDirection=="left" and -1 or 1
+    return {width=span+size*.4,height=size*1.4,firstOffset=-dir*(span-size)/2,
+        dir=dir,pitch=pitch,size=size,count=count}
+end
+function ns.GroupOrigin(db,known)
+    if db.groupLayoutVersion==1 then return db.burstX,db.burstY end
+    local slots=ns.ReminderSlots(db,known)
+    if db.auxiliaryLayoutVersion==1 and slots[1] then return db[slots[1].."X"],db[slots[1].."Y"] end
+    local offset=math.max(0,#slots-1)*(db.burstSize+db.burstSpacing)/2
+    return db.x-offset,db.y-db.mainSize/2-db.rowGap-db.burstSize/2
+end
+function ns.MigrateGroup()
+    if ns.db.groupLayoutVersion==1 then return end
+    if not ns.scanComplete or ns.scanPending or ns.LayoutLockedByCombat() then return end
+    ns.MigrateAuxiliary()
+    ns.db.burstX,ns.db.burstY=ns.GroupOrigin(ns.db,ns.known)
+    ns.db.groupLayoutVersion=1
+end
+function ns.GroupGeometry(x,y,width,height,l)
+    local fit=math.max(.001,math.min(1,(width-24)/l.width,(height-24)/l.height))
+    local lo=-width/2+12+(l.width/2+l.firstOffset)*fit
+    local hi=width/2-12-(l.width/2-l.firstOffset)*fit
+    x=lo<=hi and math.max(lo,math.min(hi,x)) or l.firstOffset*fit
+    local my=math.max(0,(height-l.height*fit)/2-12)
+    y=math.max(-my,math.min(my,y))
+    return x,y,fit,x/fit-l.firstOffset,y/fit
 end
 function ns.LayoutGeometry(db,width,height,layout)
     layout=layout or ns.IconLayout(db,0)
