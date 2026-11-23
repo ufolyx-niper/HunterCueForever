@@ -14,8 +14,24 @@ end
 local function Valid(s,item,waiting)
     return item and s.spells[item.key] and s.spells[item.key].id==item.id and ns.ChoiceValid(s,item.key,waiting)
 end
+function ns.FutureState(s,delay)
+    local future={};for k,v in pairs(s) do future[k]=v end
+    future.now=(s.now or 0)+delay;future.evaluateAt=future.now;future.spells={}
+    for k,p in pairs(s.spells) do
+        local q={};for field,value in pairs(p) do q[field]=value end
+        if p.usable==true and p.oom~=true and p.remaining and p.remaining<=delay+EPS then q.ready=true end
+        if p.remaining then q.remaining=math.max(0,p.remaining-delay) end
+        future.spells[k]=q
+    end
+    if s.gcdRemaining then future.gcdRemaining=math.max(0,s.gcdRemaining-delay);future.gcd=s.gcd and future.gcdRemaining>EPS or false end
+    if s.meleeDwell then future.meleeDwell=s.meleeDwell+delay end
+    if s.sinceAuto then future.sinceAuto=s.sinceAuto+delay end
+    if s.stingRemaining then future.stingRemaining=math.max(0,s.stingRemaining-delay) end
+    return future
+end
 function ns.PlanWait(s,raw)
     if raw.key~="auto" or not s.target or s.casting or s.ranged~=true or s.melee==true then return nil end
+    if s.gcd and not s.gcdRemaining then return nil end
     local times={}
     for _,key in ipairs(ns.futureKeys) do
         local p=s.spells[key]
@@ -23,12 +39,9 @@ function ns.PlanWait(s,raw)
     end
     table.sort(times)
     for _,time in ipairs(times) do
-        local future={};for k,v in pairs(s) do future[k]=v end;future.spells={}
-        for k,p in pairs(s.spells) do
-            local q={};for field,value in pairs(p) do q[field]=value end
-            if p.usable==true and p.remaining and p.remaining<=time+EPS then q.ready=true end
-            future.spells[k]=q
-        end
+        local horizon=math.max(time,s.gcd and s.gcdRemaining or 0)
+        if horizon>6 then return nil end
+        local future=ns.FutureState(s,horizon)
         local out=ns.Decide(future)
         local allowed=false;for _,key in ipairs(ns.futureKeys) do if key==out.key then allowed=true end end
         local p=out.key and s.spells[out.key]
@@ -52,8 +65,8 @@ function ns.ProjectCast(s)
         or not s.gcdKnown or (s.gcd and not s.gcdRemaining) then return nil end
     local horizon=math.max(s.castRemaining,s.gcd and s.gcdRemaining or 0)
     if horizon>6 then return nil end
-    local future={};for k,v in pairs(s) do future[k]=v end
-    future.casting=false;future.spells={}
+    local future=ns.FutureState(s,horizon)
+    future.casting=false
     local current=s.spells[s.castKey]
     if s.mana then
         if not current or not current.cost then return nil end
@@ -64,21 +77,23 @@ function ns.ProjectCast(s)
     local excluded={[s.castKey]=true}
     for _,key in ipairs(ns.family[s.castKey] or {}) do excluded[key]=true end
     for key,p in pairs(s.spells) do
-        local q={};for k,v in pairs(p) do q[k]=v end
+        local q=future.spells[key]
         if excluded[key] or (future.mana and (not p.cost or p.cost>future.mana)) then
             q.ready=false;q.usable=false;q.remaining=nil
-        elseif p.usable==true and p.remaining and p.remaining<=horizon+EPS then q.ready=true end
+        end
         future.spells[key]=q
     end
     return future,horizon
 end
 local function CastForecast(s,raw,m)
     m.item=nil;m.waiting=nil
+    m.seen=true;m.serial=s.actionSerial;m.gcd=s.gcd;m.gcdStart=s.gcdStart
+    m.settleAt=nil;m.spent=nil
     local future,horizon=ns.ProjectCast(s)
-    if not future then m.castItem=nil;m.castSource=nil;return Copy(raw) end
+    if not future then m.castItem=nil;m.castSource=nil;m.castToken=nil;m.castStartedAt=nil;return Copy(raw) end
     local token=s.castID or s.castStartedAt
     if m.castSource~=s.castKey or m.castToken~=token then m.castItem=nil end
-    m.castSource=s.castKey;m.castToken=token
+    m.castSource=s.castKey;m.castToken=token;m.castStartedAt=s.castStartedAt
     local item=m.castItem
     if s.stableRecommendations==false or not Valid(future,item,false) then
         local out=ns.Decide(future);local allowed=false
@@ -98,8 +113,9 @@ function ns.Recommend(s,raw,memo)
     if s.casting then return CastForecast(s,raw,m) end
     local carry=m.castItem
     local completed=carry and s.lastActionKey==m.castSource and s.lastActionAt
+        and m.castStartedAt and s.lastActionAt>=m.castStartedAt
         and now-s.lastActionAt>=0 and now-s.lastActionAt<=.3 and Valid(s,carry,false)
-    m.castItem=nil;m.castSource=nil;m.castToken=nil
+    m.castItem=nil;m.castSource=nil;m.castToken=nil;m.castStartedAt=nil
     if s.stableRecommendations==false then
         local future=ns.PlanWait(s,raw)
         return future and WaitingOutput(s,raw,future) or Copy(raw)
@@ -108,9 +124,9 @@ function ns.Recommend(s,raw,memo)
     local recentBurst=s.lastBurstAt and now-s.lastBurstAt<0.3
     local newGCD=m.seen and s.gcd and not recentBurst and
         (not m.gcd or (s.gcdStart and m.gcdStart and s.gcdStart>m.gcdStart+0.05))
-    if action or newGCD then
+    if action or newGCD or completed then
         m.item=nil;m.waiting=nil
-        m.settleAt=action and s.lastActionAt or now
+        m.settleAt=(action or completed) and s.lastActionAt or now
         m.spent=completed and carry.key or action and s.lastActionKey or nil
     end
     m.seen=true;m.serial=s.actionSerial;m.gcd=s.gcd;m.gcdStart=s.gcdStart

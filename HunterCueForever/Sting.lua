@@ -403,7 +403,7 @@ local function Event(_, event, unit, action)
     if not initialized or ns.stingConflict or not ns.db.stingEnabled then return end
 
     if event == "UNIT_MAXHEALTH" then
-        if not IsSecret(unit) and unit == "target" then targetMaxHealth = nil end
+        if IsSecret(unit) or unit == "target" then targetMaxHealth = nil;ResetSample() end
         return
     end
     if event ~= "UNIT_COMBAT" then

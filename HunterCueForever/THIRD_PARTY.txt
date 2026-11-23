@@ -1,4 +1,4 @@
-HunterCue Forever 1.4.1 is distributed as a combined work under GPL-2.0-only.
+HunterCue Forever 1.5.0 is distributed as a combined work under GPL-2.0-only.
 Complete editable Lua source accompanies the installation ZIP. No warranty.
 The original HunterCue MIT modules retain their MIT notices and permission;
 see LICENSE-HunterCue-MIT. Copyright (c) 2026 ufolyx-niper.

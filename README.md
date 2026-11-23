@@ -8,7 +8,7 @@ WowUp 选择 **Forever** →「从 URL 安装」，使用本仓库地址：
 
 `https://github.com/ufolyx-niper/HunterCueForever`
 
-手动安装：在[最新 Release](https://github.com/ufolyx-niper/HunterCueForever/releases/latest)下载 `HunterCueForever-1.4.1-forever.zip`，将其中的 `HunterCueForever` 文件夹放到 `_forever_/Interface/AddOns/`。**更新后重启游戏**，确保新增文件加载。不要把自动生成的 Source code ZIP 当安装包。
+手动安装：在[最新 Release](https://github.com/ufolyx-niper/HunterCueForever/releases/latest)下载 `HunterCueForever-1.5.0-forever.zip`，将其中的 `HunterCueForever` 文件夹放到 `_forever_/Interface/AddOns/`。**更新后重启游戏**，确保新增文件加载。不要把自动生成的 Source code ZIP 当安装包。
 
 ## 纯图标 HUD
 
@@ -85,13 +85,23 @@ WowUp 选择 **Forever** →「从 URL 安装」，使用本仓库地址：
 
 `/hcf status` 会输出每个爆发使用的是原生自身冷却、备用判断，还是资源/宠物等限制，便于定位实际客户端差异。离线验证不代表已确认你的游戏客户端行为。
 
-设置里可关闭“固定下一技能”改成实时更新。普通优先级变化不会抢走仍有效的固定技能，但范围、移动、资源不足、目标变化等真实失效会纠正。固定和预告都有时间上限，不是整场固定序列。接口隐藏冷却数值时不伪造未来时刻。
+设置里可关闭“固定下一技能”改成实时更新。普通优先级变化不会抢走仍有效的固定技能，但补鹰时限、范围、移动、资源预算和目标变化等真实失效会纠正。固定和预告都有时间上限，不是整场固定序列。接口隐藏冷却数值时不伪造未来时刻。
 
 ## 配置三系
 
-- **兽王**：雄鹰 / 雄鹰 / 奥术序列及适合的瞄准填充；省蓝减少瞄准。自行命令宠物攻击，爆发栏中狂野怒火需要存活宠物。
+- **兽王**：分别记录两次雄鹰施放的估算到期时间。在实际准备行动的时刻，两只估算雄鹰都已到达且最短剩余超过 6.2 秒，才穿插奥术；否则优先补鹰。正常连续输出仍可形成两鹰一奥术，但停手或延迟后不会机械照搬。省蓝模式保留原有门槛并跳过瞄准；自行命令宠物攻击。
 - **射击**：均衡/全力使用奥术、瞄准、狙击；省蓝减少瞄准。参考模拟使用孤狼收宠天赋，插件不会替你收宠或改天赋。
-- **生存 weaving**：设置里选择常规或积极穿插。常规保留瞄准窗口；积极更偏近战穿插。纯图标不显示走位文字，你需手动进出近战；不声称零损失穿插。
+- **生存 weaving**：常规穿插在可用的瞄准即将于下一行动后 0.5 秒内转好时，会等待并预告瞄准，避免奥术占用 GCD；移动、射程不符或瞄准不可用时不盲等。积极模式仍偏瞬发。进入近战超过 1.5 秒后，不再催促新的近战技能；若猛禽已排队，仍应等它挥出再退。纯图标不显示走位文字，也不自动移动或取消猛禽队列。
+
+### 雄鹰估时与蓝量保护
+
+雄鹰不是玩家常驻宠物，插件目前不能确认每只鹰的实际存活。根据已观察到的玩家施放，使用 **1 秒到达 + 18 秒持续**估时，最多保留两只并分别过期；奥术不会清空估时。重载、死亡、切目标或重新识别专精后，保守重新建立估时，可能提前补鹰。明确属于旧目标或其他目标的施放不计入当前目标覆盖；`/hcf status` 会标注“施放估算”，不会冒充存活确认。
+
+6.2 秒门槛包含 6 秒共享冷却和 0.2 秒余量，不额外叠加下一只鹰的飞行时间。它保留正常连续输出的穿插机会，**不保证延迟、提前死亡或目标转换中零断档，也不是全局最高 DPS 证明**。以后能读取更可靠的守护者状态时才能进一步消除估时误差。
+
+实时推荐、固定推荐、空档预告和读条预告共用相同条件。预告会推进时间，重新检查到期状态、资源、射程和策略；已固定图标在补鹰临界、蓝量不足等条件出现时仍会及时纠正。
+
+均衡/省蓝的远程循环会按候选技能的真实可读蓝耗计算，并为该专精/目标数量下的核心技能留蓝。**毒蛇监控启用且毒蛇缺失、临近结束或状态不明时，仍预留其蓝耗**；独立图标不代表不需要它。确认毒蛇仍有余量或关闭毒蛇监控后，可释放这部分预留。这只是资源预算，不会出现第二套毒蛇提示；接口受限时预算可能偏保守。全力模式放宽预留和百分比门槛，但不会推荐已知蓝量支付不起的技能。
 
 守护、强击光环、饰品、药水等仍由你自行安排。印记提示在施法后最多有2秒生效等待；这不等于确认命中。毒蛇显示使用上述独立监控，切目标重新采样。
 
@@ -131,6 +141,6 @@ WowUp 选择 **Forever** →「从 URL 安装」，使用本仓库地址：
 
 参考了 [MaxDps 的变化才刷新](https://github.com/kaminaris/MaxDps/blob/v11.3.99/Core.lua)、[Hekili 完成预测后更新显示](https://github.com/Hekili/hekili/blob/thewarwithin/Core.lua)、[HeroLib 按下一行动时刻判断冷却](https://github.com/herotc/hero-lib/blob/thewarwithin/HeroLib/Class/Spell/Cooldown.lua)。**这不表示它们本身会固定整个公共 CD，也不表示其零售版架构可直接用于 Forever。**本插件的固定规则是按玩家操作需求独立实现，没有复制它们的代码。
 
-离线测试包含 Lua5.1、推荐时间序列、纯图标结构、独立图标位置迁移/拖动/屏幕适配、关闭设置后继续编辑、战斗退出、独立印记、毒蛇原生接口注册/健康曲线转交、旧插件冲突、登录显隐及安装包检查。Mock 检查接口连接和逻辑，不能证明真实客户端原生裁剪或转圈的渲染效果。**尚未进行真实客户端的新界面、受限数据和实战验收**。模拟策略不等于本插件的实战DPS保证；移动/网络/客户端限制仍会影响提示。
+离线测试还覆盖逐只雄鹰期限、前瞻时间推进、三系共享资格检查、省蓝/毒蛇预留、射程探测合并（相互矛盾时保留未知）、近战排队边界和目标最大血量变化。事件时间线对比不是伤害模拟，没有据此宣称 DPS 提升。离线测试包含 Lua5.1、推荐时间序列、纯图标结构、独立图标位置迁移/拖动/屏幕适配、关闭设置后继续编辑、战斗退出、独立印记、毒蛇原生接口注册/健康曲线转交、旧插件冲突、登录显隐及安装包检查。Mock 检查接口连接和逻辑，不能证明真实客户端原生裁剪或转圈的渲染效果。**尚未进行真实客户端的新界面、受限数据和实战验收**。模拟策略不等于本插件的实战DPS保证；移动/网络/客户端限制仍会影响提示。
 
-合并发行版按 **GPL-2.0-only** 提供；原有独立模块的 MIT 声明保留，完整来源和许可见 [THIRD_PARTY.txt](HunterCueForever/THIRD_PARTY.txt)。技能事实参考 [WoWSims Forever](https://github.com/wowsims/forever/tree/00fecd9cff1be57483e21c061ed50d69748ae056)，接口合约参考 [Blizzard UI Forever 源码镜像](https://github.com/Gethe/wow-ui-source/tree/forever)。
+合并发行版按 **GPL-2.0-only** 提供；原有独立模块的 MIT 声明保留，雄鹰时序参考 [WoWSims 雄鹰实现](https://github.com/wowsims/forever/blob/master/sim/hunter/summon_hawk.go)，常规穿插条件参考 [WoWSims normal weave](https://github.com/wowsims/forever/blob/master/ui/specs/hunter/dps/apls/normal_weave.apl.siml)。完整来源和许可见 [THIRD_PARTY.txt](HunterCueForever/THIRD_PARTY.txt)。技能事实参考 [WoWSims Forever](https://github.com/wowsims/forever/tree/00fecd9cff1be57483e21c061ed50d69748ae056)，接口合约参考 [Blizzard UI Forever 源码镜像](https://github.com/Gethe/wow-ui-source/tree/forever)。

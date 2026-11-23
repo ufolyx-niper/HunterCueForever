@@ -1,6 +1,6 @@
 -- SPDX-License-Identifier: MIT
 local _, ns = ...
-ns.version = "1.4.1"
+ns.version = "1.5.0"
 -- Rank order is explicit. Spell IDs are facts checked against WoWSims Forever
 -- 00fecd9c spell_data_auto_gen.go; never sort by ID or localized rank text.
 ns.spells = {
@@ -24,6 +24,8 @@ ns.burstOrder={"berserking","rapid","wrath"}
 ns.reminderOrder={"berserking","rapid","wrath","mark"}
 ns.burstOption={berserking="burstRacial",rapid="burstRapid",wrath="burstWrath"}
 ns.futureKeys={"hawk","arcane","aimed","sniper","multi","volley"}
+-- Observed-cast estimates, not live guardian counts. All four Hawk ranks have cap 2.
+ns.hawkFlight=1;ns.hawkLifetime=18;ns.hawkSharedWindow=6;ns.hawkLead=.2
 ns.meleeSpell = {raptor=true, mongoose=true, strider=true, immolation=true, explosive=true}
 ns.family = {hawk={"hawk","arcane"}, arcane={"hawk","arcane"},
     aimed={"aimed","multi"}, multi={"aimed","multi"},

@@ -47,9 +47,25 @@ local function SpellAPI(name,...)
     return Call(C_Spell and C_Spell[name],...)
 end
 ns.known={};ns.cooldownCache={};ns.fences={};ns.pending={};ns.inferred={};ns.attempts={};ns.generation=0
+ns.hawks={};ns.hawkSent={};ns.seenSuccess={}
+local function TrimRecords(records,now)
+    local count,oldest,oldestAt=0,nil,nil
+    for k,v in pairs(records) do
+        local at=type(v)=="table" and v.at or v
+        if now-at>10 then records[k]=nil
+        else
+            count=count+1
+            if not oldestAt or at<oldestAt then oldest=k;oldestAt=at end
+        end
+    end
+    if count>32 and oldest then records[oldest]=nil end
+end
+function ns.PruneHawks(now)
+    for i=#ns.hawks,1,-1 do if ns.hawks[i].expires<=now then table.remove(ns.hawks,i) end end
+end
 function ns.ResetTracking()
     ns.cooldownCache={};ns.fences={};ns.pending={};ns.inferred={};ns.attempts={}
-    ns.hawkCount=0;ns.lastHawk=nil;ns.lastAuto=nil;ns.meleeSince=nil;ns.lastError=nil;ns.generation=ns.generation+1
+    ns.hawks={};ns.hawkSent={};ns.seenSuccess={};ns.lastAuto=nil;ns.meleeSince=nil;ns.lastError=nil;ns.generation=ns.generation+1
     ns.actionSerial=(ns.actionSerial or 0)+1;ns.lastActionAt=nil;ns.lastActionKey=nil;ns.lastBurstAt=nil
     if ns.ClearRecommendation then ns.ClearRecommendation() end
 end
@@ -176,7 +192,10 @@ local function Aura(key)
         if a==nil then if unknown then return nil end;return false end
         local id,readable=Field(a,"spellId")
         if not readable then unknown=true
-        elseif id and ns.byID[id]==key then return true end
+        elseif id and ns.byID[id]==key then
+            local expires=Num(Field(a,"expirationTime"))
+            return true,expires and math.max(0,expires-Now()) or nil
+        end
     end
     return nil -- bounded/partial enumeration cannot prove absence.
 end
@@ -188,19 +207,26 @@ local function TargetIdentity()
 end
 function ns.TargetChanged()
     ns.generation=ns.generation+1;ns.inferred={};ns.pending={};ns.attempts={};ns.meleeSince=nil;ns.lastAuto=nil
+    ns.hawks={} -- Do not assume guardians on the previous target cover the new target.
     if ns.ClearRecommendation then ns.ClearRecommendation() end
 end
 function ns.Sent(unit,targetName,guid,id)
     unit=ns.Clean(unit);targetName=ns.Clean(targetName);guid=ns.Clean(guid);id=ns.Clean(id)
     if unit~="player" or type(guid)~="string" or type(id)~="number" then return end
     local key=ns.byID[id]
-    if key~="mark" and key~="sting" then return end
+    if key~="mark" and key~="sting" and key~="hawk" then return end
+    local hawkSent
+    if key=="hawk" then
+        hawkSent={generation=ns.generation,at=Now()};ns.hawkSent[guid]=hawkSent;TrimRecords(ns.hawkSent,Now())
+    end
     local target=TargetIdentity()
-    if not target or (targetName~=target.name and targetName~=target.full) then return end
+    if not target or not targetName then return end
+    if targetName~=target.name and targetName~=target.full then if hawkSent then hawkSent.invalid=true end;return end
     for _,token in ipairs({"mouseover","focus"}) do
         local otherName=Call(UnitName,token);local otherGUID=Call(UnitGUID,token)
-        if otherName==target.name and otherGUID and otherGUID~=target.guid then return end
+        if otherName==target.name and otherGUID and otherGUID~=target.guid then if hawkSent then hawkSent.invalid=true end;return end
     end
+    if hawkSent then hawkSent.target=target.guid;return end
     ns.pending[guid]={key=key,target=target.guid,generation=ns.generation,at=Now()}
     local n=0;for k,v in pairs(ns.pending) do
         n=n+1;if Now()-v.at>10 or n>16 then ns.pending[k]=nil end
@@ -211,6 +237,10 @@ function ns.Succeeded(unit,guid,id)
     if unit~="player" or type(id)~="number" then return end
     local key=ns.byID[id];if not key then return end
     local now=Now()
+    if key~="auto" and type(guid)=="string" then
+        if ns.seenSuccess[guid] and now-ns.seenSuccess[guid]<=10 then return end
+        ns.seenSuccess[guid]=now;TrimRecords(ns.seenSuccess,now)
+    end
     local isBurst=ns.burstOption[key]~=nil
     for _,k in ipairs(ns.family[key] or {key}) do ns.cooldownCache[k]=nil;ns.fences[k]=now+(isBurst and 1 or 0.25) end
     if isBurst then ns.lastBurstAt=now
@@ -218,8 +248,19 @@ function ns.Succeeded(unit,guid,id)
         ns.actionSerial=(ns.actionSerial or 0)+1;ns.lastActionAt=now
         ns.lastActionKey=(key~="mark" and key~="sting") and key or nil -- Independent monitors never occupy the spent main icon.
     end
-    if key=="hawk" then ns.hawkCount=math.min(2,(ns.hawkCount or 0)+1);ns.lastHawk=now
-    elseif key=="arcane" then ns.hawkCount=0
+    if key=="hawk" then
+        local sent=type(guid)=="string" and ns.hawkSent[guid]
+        if type(guid)=="string" then ns.hawkSent[guid]=nil end
+        local target=sent and sent.target and TargetIdentity()
+        local valid=not sent or (not sent.invalid and sent.generation==ns.generation
+            and (not sent.target or (target and target.guid==sent.target)))
+        if valid then
+            ns.PruneHawks(now)
+            if #ns.hawks>=2 then table.remove(ns.hawks,1) end
+            ns.hawks[#ns.hawks+1]={arrives=now+ns.hawkFlight,expires=now+ns.hawkFlight+ns.hawkLifetime}
+        else
+            ns.hawks={} -- An off-target summon may replace one of the globally capped guardians.
+        end
     elseif key=="auto" then ns.lastAuto=now end
     if type(guid)~="string" then return end
     local sent=ns.pending[guid];ns.pending[guid]=nil
@@ -233,9 +274,9 @@ function ns.Succeeded(unit,guid,id)
     end
 end
 local function AuraState(key,now)
-    local active=Aura(key)
+    local active,remaining=Aura(key)
     local attempt=ns.attempts[key]
-    if active==true then ns.attempts[key]=nil;return true,false,false end
+    if active==true then ns.attempts[key]=nil;return true,false,false,remaining end
     if active==false and attempt then
         if not attempt.checked and now-attempt.at>=2 then
             attempt.checked=true;attempt.failures=math.min(2,attempt.failures+1)
@@ -250,12 +291,25 @@ local function AuraState(key,now)
     end
     return nil,false
 end
+local function ProbeRange(spells,keys)
+    local yes,no,unknown,any=false,false,false,false
+    for _,key in ipairs(keys) do
+        local p=spells[key]
+        if p then
+            any=true
+            if p.range==true then yes=true elseif p.range==false then no=true else unknown=true end
+        end
+    end
+    if yes and not no then return true end
+    if any and no and not yes and not unknown then return false end
+    return nil -- Conflicting explicit probes and unknown-only evidence are not a distance proof.
+end
 function ns.Snapshot()
     local now=Now();local db=ns.db
-    -- Reset the sequence after a long interruption; this is not an active-hawk count.
-    if ns.lastHawk and now-ns.lastHawk>18 then ns.hawkCount=0;ns.lastHawk=nil end
+    ns.PruneHawks(now)
     local s={now=now,spells={},spec=ns.Profile(),mode=db.mode,targets=db.targets,
-        cooldowns=db.cooldowns,traps=db.traps,weave=db.weave,hawkCount=ns.hawkCount or 0,readiness=false}
+        cooldowns=db.cooldowns,traps=db.traps,weave=db.weave,hawks={},readiness=false,stingEnabled=db.stingEnabled}
+    for _,h in ipairs(ns.hawks) do s.hawks[#s.hawks+1]={arrives=h.arrives,expires=h.expires} end
     s.generation=ns.generation;s.actionSerial=ns.actionSerial or 0
     s.lastActionAt=ns.lastActionAt;s.lastActionKey=ns.lastActionKey;s.lastBurstAt=ns.lastBurstAt
     s.selectionBlockedUntil=now
@@ -270,6 +324,7 @@ function ns.Snapshot()
     s.classification=Call(UnitClassification,"target");s.targetInCombat=Call(UnitAffectingCombat,"target")
     s.inCombat=ns.enteringCombat==true or Call(InCombatLockdown)==true
     s.playerAlive=Call(UnitIsDeadOrGhost,"player")==false
+    if not s.playerAlive then ns.hawks={};s.hawks={} end
     s.target=Call(UnitExists,"target")==true and Call(UnitCanAttack,"player","target")==true
         and Call(UnitIsDeadOrGhost,"target")==false and Call(UnitIsPlayer,"target")==false
         and s.playerAlive
@@ -294,14 +349,13 @@ function ns.Snapshot()
             queued=Call(IsCurrentSpell,id),cost=Cost(id)}
         if key~="auto" and ready~=nil then s.readiness=true end
     end
-    local melee=s.spells.raptor or s.spells.mongoose or s.spells.strider
-    local ranged=s.spells.arcane or s.spells.auto
-    s.melee=melee and melee.range;s.ranged=ranged and ranged.range
+    s.melee=ProbeRange(s.spells,{"raptor","mongoose","strider"})
+    s.ranged=ProbeRange(s.spells,{"arcane","auto"})
     if s.melee==true then ns.meleeSince=ns.meleeSince or now;s.meleeDwell=now-ns.meleeSince
     else ns.meleeSince=nil end
     s.sinceAuto=ns.lastAuto and now-ns.lastAuto
     s.mark,s.markEstimated,s.markBackoff=AuraState("mark",now)
-    s.sting,s.stingEstimated,s.stingBackoff=AuraState("sting",now)
+    s.sting,s.stingEstimated,s.stingBackoff,s.stingRemaining=AuraState("sting",now)
     s.markPending=ns.attempts.mark~=nil and now-ns.attempts.mark.at<2
     s.stingPending=ns.attempts.sting~=nil and now-ns.attempts.sting.at<2
     return s
@@ -362,6 +416,10 @@ function ns.Command(message)
     elseif cmd=="status" then
         local s=ns.Snapshot();local count=0;for _ in pairs(ns.known) do count=count+1 end
         Say(ns.version.." / "..s.spec.." / "..s.mode.." / 已学技能组 "..count)
+        if s.spec=="bm" and s.spells.hawk then
+            local _,expires,hawks=ns.HawkCoverage(s,s.now)
+            Say("雄鹰：施放估算 "..(hawks or 0).." 只"..(expires and (" / 最短剩余 "..string.format("%.1f",expires-s.now).." 秒") or "").."，不是存活确认")
+        end
         Say("蓝量:"..(s.mana and "可读" or "受限").." 回蓝:"..(s.regen and "可读" or "受限")
             .." 技能状态:"..(s.readiness and "可读" or "不可读").." 射程:"..(s.ranged==nil and "未知" or "可读")
             .." 钉刺:"..(s.sting==nil and "未知" or s.stingEstimated and "估算" or "可读"))
