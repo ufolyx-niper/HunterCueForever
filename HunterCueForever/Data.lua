@@ -1,6 +1,6 @@
 -- SPDX-License-Identifier: MIT
 local _, ns = ...
-ns.version = "1.7.0"
+ns.version = "1.8.0"
 -- Rank order is explicit. Spell IDs are facts checked against WoWSims Forever
 -- 00fecd9c spell_data_auto_gen.go; never sort by ID or localized rank text.
 ns.spells = {
@@ -28,7 +28,7 @@ ns.meleeSpell = {raptor=true, mongoose=true, strider=true, immolation=true, expl
 ns.family = {hawk={"hawk","arcane"}, arcane={"hawk","arcane"},
     aimed={"aimed","multi"}, multi={"aimed","multi"},
     immolation={"immolation","explosive"}, explosive={"immolation","explosive"}}
-ns.defaults = {spec="auto", mode="balanced", targets=1, cooldowns=true,
+ns.defaults = {spec="auto", mode="balanced", targets=0, cooldowns=true,
     mmSniper=true,traps=false, weave="normal", enabled=true, locked=false, x=36, y=-80,
     mainSize=56,burstSize=32,burstSpacing=8,rowGap=12,iconLayoutVersion=1,
     burstX=-24,burstY=-136,burstDirection="right",groupLayoutVersion=0,burstGlow=true,stingGlow=true,
@@ -62,7 +62,8 @@ function ns.Settings(raw)
     end
     if not ns.specNames[out.spec] then out.spec="auto" end
     if not ns.modeNames[out.mode] then out.mode="balanced" end
-    if out.targets~=1 and out.targets~=3 and out.targets~=6 then out.targets=1 end
+    if (raw.targets~=nil and type(raw.targets)~="number")
+        or (out.targets~=0 and out.targets~=1 and out.targets~=3 and out.targets~=6) then out.targets=1 end
     if out.weave~="normal" and out.weave~="aggressive" then out.weave="normal" end
     if out.markReminder~="off" and out.markReminder~="priority" and out.markReminder~="all" then out.markReminder="priority" end
     if out.burstDirection~="left" and out.burstDirection~="right" then out.burstDirection="right" end

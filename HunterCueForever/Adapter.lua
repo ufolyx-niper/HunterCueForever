@@ -18,10 +18,11 @@ local function Pair(fn,...)
     local av,ar=ns.Clean(a);local bv,br=ns.Clean(b)
     return av,bv,ar and br
 end
+local function ReadField(t,k) return t[k] end
 local function Field(t,k)
     local v,readable=ns.Clean(t)
     if not readable or type(v)~="table" then return nil,false end
-    return Call(function() return v[k] end)
+    return Call(ReadField,v,k)
 end
 local function Num(v)
     if type(v)=="number" and v==v and math.abs(v)<1e15 then return v end
@@ -376,6 +377,138 @@ local function ProbeRange(spells,keys)
     if any and no and not yes and not unknown then return false end
     return nil -- Conflicting explicit probes and unknown-only evidence are not a distance proof.
 end
+function ns.ResetTargets(hard)
+    ns.targetScan=nil
+    if hard~=false then ns.targetEstimate=ns.TargetEstimator and ns.TargetEstimator.New() or nil end
+end
+local function TargetScan(probes)
+    local result={count=0,unknown=0,calls=0,reason="未确认当前目标的姓名板"}
+    local plates=Call(C_NamePlate and C_NamePlate.GetNamePlates)
+    if type(plates)~="table" then result.reason="姓名板列表不可读";return result end
+    local size=Num(Call(function() return #plates end))
+    if not size or size<0 then result.reason="姓名板列表不可读";return result end
+    local units,seen={},{};local anchor
+    result.partial=size>80
+    for i=1,math.min(size,80) do
+        local plate=Field(plates,i);local unit=Field(plate,"namePlateUnitToken")
+        if type(unit)~="string" or not unit:match("^nameplate%d+$") then
+            result.reason="姓名板单位不可读";return result
+        end
+        if not seen[unit] then
+            seen[unit]=true;units[#units+1]=unit
+            if Call(UnitIsUnit,unit,"target")==true then anchor=unit end
+        end
+    end
+    if not anchor then return result end
+    local own={"player"};local team={}
+    if Call(UnitExists,"pet")==true then own[#own+1]="pet" end
+    local raid=Call(IsInRaid)
+    if raid==nil then result.partial=true end
+    if raid~=nil then
+        local prefix=raid and "raid" or "party"
+        for i=1,raid and 40 or 4 do
+            local unit=prefix..i;local exists=Call(UnitExists,unit)
+            if exists==true then
+                team[#team+1]=unit
+                if Call(UnitExists,prefix.."pet"..i)==true then team[#team+1]=prefix.."pet"..i end
+            elseif exists==nil then result.partial=true end
+        end
+    end
+    local checks={{UnitExists,true},{UnitIsDeadOrGhost,false},{UnitIsPlayer,false},{UnitAffectingCombat,true}}
+    local function Eligible(unit)
+        for _,probe in ipairs(checks) do
+            local value=Call(probe[1],unit)
+            if value==nil then return nil end
+            if value~=probe[2] then return false end
+        end
+        local attack=Call(UnitCanAttack,"player",unit)
+        if attack==false then return false end
+        if attack~=true then return nil end
+        local unknown=false
+        for _,id in ipairs(probes) do
+            local value=SpellAPI("IsSpellInRange",id,unit)
+            if value==true then return true end
+            if value~=false then unknown=true end
+        end
+        if unknown then return nil end
+        return false
+    end
+    local function Threat(unit,engagers)
+        local unknown=false
+        for _,who in ipairs(engagers) do
+            if result.calls>=512 then result.partial=true;return nil end
+            result.calls=result.calls+1
+            local value,readable=Call(UnitThreatSituation,who,unit)
+            if readable and type(value)=="number" and value>=0 and value<=3 and value==math.floor(value) then return true end
+            if not readable or value~=nil then unknown=true end
+        end
+        if unknown then return nil end
+        return false
+    end
+    if Eligible(anchor)~=true then result.reason="当前目标范围或交战状态未确认";return result end
+    local a=Threat(anchor,own)
+    if a~=true then a=Threat(anchor,team) end
+    if a~=true then result.reason="未确认当前目标与本队交战";return result end
+    result.count=1;result.valid=true;result.reason="已确认交战目标（估算）"
+    local pending={}
+    -- First cover all player/pet engagements, so foreign raid combat cannot
+    -- consume the full budget before our own pack is considered.
+    for _,unit in ipairs(units) do
+        if unit~=anchor then
+            local eligible=Eligible(unit)
+            if eligible==true then
+                local ownThreat=Threat(unit,own)
+                if ownThreat==true then result.count=result.count+1
+                else pending[#pending+1]={unit=unit,unknown=ownThreat==nil} end
+            elseif eligible==nil then result.unknown=result.unknown+1 end
+            if result.count>=6 then return result end
+        end
+    end
+    for i,p in ipairs(pending) do
+        local threat=Threat(p.unit,team)
+        if threat==true then result.count=result.count+1
+        elseif threat==nil or p.unknown then result.unknown=result.unknown+1 end
+        if result.count>=6 then return result end
+        if result.calls>=512 then
+            result.partial=true;result.unknown=result.unknown+#pending-i;break
+        end
+    end
+    return result
+end
+function ns.EffectiveTargets(s)
+    local mode=ns.db.targets
+    if mode~=0 then
+        ns.targetStatus={count=mode,effective=mode,reason="手动"};return mode
+    end
+    local T=ns.TargetEstimator
+    if not T then ns.targetStatus={count=0,effective=1,reason="请完全退出并重启游戏，加载自动目标模块"};return 1 end
+    ns.targetEstimate=ns.targetEstimate or T.New()
+    if not s.inCombat or not s.playerAlive then ns.ResetTargets() end
+    if not s.inCombat or not s.target or s.targetInCombat~=true or s.scanBlocked or (s.ranged~=true and s.melee~=true) then
+        ns.targetScan=nil
+        T.Suspend(ns.targetEstimate,s.now)
+        ns.targetStatus={count=0,effective=1,reason="当前目标、交战或射程未确认，回退单体"};return 1
+    end
+    local probes={};local ranged=ns.known.arcane or ns.known.auto
+    if ranged then probes[#probes+1]=ranged end
+    for _,key in ipairs({"raptor","mongoose","strider"}) do if ns.known[key] then probes[#probes+1]=ns.known[key] end end
+    local key=table.concat(probes,":");local c=ns.targetScan
+    if not c or c.key~=key or s.now<c.at or s.now-c.at>=.5 then
+        c=TargetScan(probes);c.at=s.now;c.key=key;ns.targetScan=c
+        if c.valid then
+            c.effective=T.Observe(ns.targetEstimate,s.now,c.count)
+            if c.count>=3 and c.effective<(c.count>=6 and 6 or 3) then c.reason="等待连续确认" end
+        else ns.targetEstimate=T.New();c.effective=1 end
+    end
+    ns.targetStatus=c
+    return c.effective
+end
+function ns.TargetStatusText()
+    local t=ns.targetStatus or {count=0,effective=1,reason="等待采样"}
+    return (ns.db.targets==0 and "自动估算" or "手动").." / 确认 "..t.count..(t.count>=6 and "+" or "")
+        .." / 当前策略 "..t.effective.." / "..t.reason
+        ..((t.unknown or 0)>0 and " / 未确认 "..t.unknown or "")..(t.partial and " / 部分采样" or "")
+end
 function ns.Snapshot()
     local now=Now();local db=ns.db
     ns.ResolvePendingScan()
@@ -432,6 +565,7 @@ function ns.Snapshot()
     end
     s.melee=ProbeRange(s.spells,{"raptor","mongoose","strider"})
     s.ranged=ProbeRange(s.spells,{"arcane","auto"})
+    s.targets=ns.EffectiveTargets(s)
     if s.melee==true then ns.meleeSince=ns.meleeSince or now;s.meleeDwell=now-ns.meleeSince
     else ns.meleeSince=nil end
     s.sinceAuto=ns.lastAuto and now-ns.lastAuto
@@ -480,9 +614,10 @@ function ns.Command(message)
     elseif cmd=="spec" and ns.specNames[arg] then ns.db.spec=arg;ns.ResetTracking()
     elseif cmd=="mode" and arg=="next" then
         ns.db.mode=({balanced="conserve",conserve="burst",burst="balanced"})[ns.db.mode]
-    elseif cmd=="targets" and arg=="next" then ns.db.targets=({[1]=3,[3]=6,[6]=1})[ns.db.targets]
+    elseif cmd=="targets" and arg=="next" then ns.db.targets=({[0]=1,[1]=3,[3]=6,[6]=0})[ns.db.targets];ns.ResetTargets()
+    elseif cmd=="targets" and arg=="auto" then ns.db.targets=0;ns.ResetTargets()
     elseif cmd=="mode" and ns.modeNames[arg] then ns.db.mode=arg
-    elseif cmd=="targets" and (arg=="1" or arg=="3" or arg=="6") then ns.db.targets=tonumber(arg)
+    elseif cmd=="targets" and (arg=="1" or arg=="3" or arg=="6") then ns.db.targets=tonumber(arg);ns.ResetTargets()
     elseif cmd=="weave" and (arg=="normal" or arg=="aggressive") then ns.db.weave=arg;ns.ResetTracking()
     elseif (cmd=="burst" or cmd=="traps") and (arg=="on" or arg=="off") then
         ns.db[cmd=="burst" and "cooldowns" or "traps"]=arg=="on"
@@ -504,6 +639,7 @@ function ns.Command(message)
     elseif cmd=="status" then
         local s=ns.Snapshot();local count=0;for _ in pairs(ns.known) do count=count+1 end
         Say(ns.version.." / "..s.spec.." / "..s.mode.." / 已学技能组 "..count)
+        Say(ns.TargetStatusText())
         ns.HawkStatus()
         if ns.scanDegraded then Say("技能扫描部分受限：仅使用确认已学技能；可手动选择专精。") end
         Say("蓝量:"..(s.mana and "可读" or "受限").." 回蓝:"..(s.regen and "可读" or "受限")
@@ -518,12 +654,13 @@ function ns.Command(message)
         if ns.lastError then Say("最近一次状态/界面更新失败；请 /reload 后再次检查。");end
         return
     else
-        Say("/hcf 打开设置；/hcf spec auto|bm|mm|sv · mode balanced|conserve|burst · targets 1|3|6")
+        Say("/hcf 打开设置；/hcf spec auto|bm|mm|sv · mode balanced|conserve|burst · targets auto|1|3|6")
         Say("/hcf weave normal|aggressive · burst on|off · traps on|off · show|hide|lock|reset|status · pos x y")
         Say("/hcf config 打开设置并独立调整图标大小/间距 · /hcf help 查看命令")
         Say("/hcf stable on|off 固定推荐 · /hcf targets next 或 /hcf mode next 战斗中切换")
         return
     end
+    if cmd=="targets" then ns.Snapshot();Say(ns.TargetStatusText()) end
     if ns.ApplyUI then ns.ApplyUI() end
     if ns.RefreshOptions then ns.RefreshOptions() end
 end
@@ -536,7 +673,8 @@ local function Register(method,event,...)
 end
 for _,event in ipairs({"PLAYER_LOGIN","PLAYER_ENTERING_WORLD","PLAYER_TARGET_CHANGED","PLAYER_DEAD",
     "SPELLS_CHANGED","PLAYER_TALENT_UPDATE","CHARACTER_POINTS_CHANGED","PLAYER_REGEN_ENABLED","PLAYER_REGEN_DISABLED",
-    "UI_SCALE_CHANGED","DISPLAY_SIZE_CHANGED","SPELL_UPDATE_COOLDOWN","PLAYER_TOTEM_UPDATE","PLAYER_LOGOUT","ACTIVE_TALENT_GROUP_CHANGED"}) do Register(events.RegisterEvent,event) end
+    "UI_SCALE_CHANGED","DISPLAY_SIZE_CHANGED","SPELL_UPDATE_COOLDOWN","PLAYER_TOTEM_UPDATE","PLAYER_LOGOUT","ACTIVE_TALENT_GROUP_CHANGED",
+    "GROUP_ROSTER_UPDATE","UNIT_PET"}) do Register(events.RegisterEvent,event) end
 Register(events.RegisterUnitEvent,"UNIT_SPELLCAST_SENT","player")
 Register(events.RegisterUnitEvent,"UNIT_SPELLCAST_SUCCEEDED","player")
 local function Event(_,event,...)
@@ -557,6 +695,11 @@ local function Event(_,event,...)
         return
     end
     if not ns.db then return end
+    if event=="GROUP_ROSTER_UPDATE" or event=="UNIT_PET" then ns.ResetTargets(false);return end
+    if event=="PLAYER_TARGET_CHANGED" then
+        ns.ResetTargets(false)
+        if ns.targetEstimate and ns.TargetEstimator then ns.TargetEstimator.CancelUpgrade(ns.targetEstimate) end
+    elseif event=="PLAYER_DEAD" or event=="PLAYER_ENTERING_WORLD" or event=="PLAYER_REGEN_ENABLED" or event=="PLAYER_REGEN_DISABLED" then ns.ResetTargets() end
     if event=="PLAYER_REGEN_ENABLED" or event=="PLAYER_ENTERING_WORLD" then ns.enteringCombat=nil end
     if event=="PLAYER_REGEN_ENABLED" or event=="PLAYER_REGEN_DISABLED" then ns.layoutRefreshPending=true end
     if event=="PLAYER_REGEN_DISABLED" then

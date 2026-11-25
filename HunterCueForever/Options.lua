@@ -2,9 +2,9 @@
 local _,ns=...
 ns.optionViews={}
 local enums={spec={"auto","bm","mm","sv"},mode={"balanced","conserve","burst"},
-    targets={1,3,6},visibility={"always","target","combat"},weave={"normal","aggressive"},markReminder={"off","priority","all"},burstDirection={"right","left"}}
+    targets={0,1,3,6},visibility={"always","target","combat"},weave={"normal","aggressive"},markReminder={"off","priority","all"},burstDirection={"right","left"}}
 local labels={right="向右展开",left="向左展开",auto="自动识别",bm="兽王",mm="射击",sv="生存 weaving",balanced="均衡",conserve="省蓝",burst="全力",
-    always="始终显示",target="有敌对目标时",combat="仅战斗中",normal="常规穿插",aggressive="积极穿插",off="关闭",priority="精英 / 首领（推荐）",all="所有敌对目标",[1]="单体",[3]="3+ 目标",[6]="6+ 目标"}
+    always="始终显示",target="有敌对目标时",combat="仅战斗中",normal="常规穿插",aggressive="积极穿插",off="关闭",priority="精英 / 首领（推荐）",all="所有敌对目标",[0]="自动估算",[1]="强制单体",[3]="强制 3+ 目标",[6]="强制 6+ 目标"}
 local layoutFields={x=true,y=true,mainSize=true,burstSize=true,burstSpacing=true,rowGap=true,locked=true,stingSize=true,stingX=true,stingY=true,burstDirection=true}
 for key in pairs(ns.positionKeys) do layoutFields[key]=true end
 local function ValidNumber(v) return type(v)=="number" and v==v and math.abs(v)<1e10 end
@@ -27,6 +27,7 @@ function ns.SetOption(key,value)
         ns.db.burstX,ns.db.burstY=ns.GroupOrigin(ns.db,ns.known);ns.db.groupLayoutVersion=1
     end
     ns.db[key]=value;ns.resetArmed=false
+    if key=="targets" then ns.ResetTargets() end
     if key=="spec" or key=="weave" then ns.ResetTracking() end
     Refresh();return true
 end
@@ -45,7 +46,7 @@ function ns.ArrangeSmallIcons()
 end
 function ns.ResetAll()
     if not ns.resetArmed or ns.LayoutLockedByCombat() then return false end
-    ns.db=ns.Settings({});HunterCueForeverDB=ns.db;ns.resetArmed=false;ns.EndPreview();ns.ResetTracking();Refresh();return true
+    ns.db=ns.Settings({});HunterCueForeverDB=ns.db;ns.resetArmed=false;ns.EndPreview();ns.ResetTracking();ns.ResetTargets();Refresh();return true
 end
 local function Text(parent,text,x,y,width,size,height)
     local f=parent:CreateFontString(nil,"OVERLAY","GameFontNormal")
@@ -88,7 +89,7 @@ local function BuildCanvas(parent)
     local panel=CreateFrame("Frame",nil,parent);panel:Hide()
     local scroll=CreateFrame("ScrollFrame",nil,panel,"UIPanelScrollFrameTemplate")
     scroll:SetPoint("TOPLEFT",0,0);scroll:SetPoint("BOTTOMRIGHT",-28,0)
-    local content=CreateFrame("Frame",nil,scroll);content:SetSize(560,2330);scroll:SetScrollChild(content)
+    local content=CreateFrame("Frame",nil,scroll);content:SetSize(560,2500);scroll:SetScrollChild(content)
     local v={panel=panel,controls={},layoutControls={},numericControls={},refreshing=false};ns.optionViews[#ns.optionViews+1]=v
     local c=v.controls
     Text(content,"HunterCue Forever · 设置",16,12,520,20,28)
@@ -181,7 +182,7 @@ local function BuildCanvas(parent)
     Check("traps","允许伤害陷阱提示（默认关闭，注意控场怪）",822)
     Choice("weave","穿插方式 · 仅生存",862)
     Check("stableRecommendations","公共 CD 内固定下一技能（推荐）",906)
-    Text(content,"读条期间灰色图标是下一技能预告：等读条结束，勿打断。\n原建议失效仍会纠正；取消勾选则实时更新。\n战斗切换：/hcf targets next 或 /hcf mode next。",16,944,520,11,52)
+    Text(content,"读条期间灰色图标是下一技能预告：等读条结束，勿打断。\n自动估算与手动目标数在上方切换；详细限制见本页底部。\n战斗切换：/hcf targets next 或 /hcf mode next。",16,944,520,11,52)
     Text(content,"独立爆发栏 · 冷却中隐藏",16,1004,520,16)
     Check("cooldowns","启用下方爆发提醒（不替换大图标）",1036)
     Check("burstRacial","巨魔：狂暴",1070)
@@ -214,6 +215,8 @@ local function BuildCanvas(parent)
     end);v.layoutControls[#v.layoutControls+1]=c.reset
     Check("mmSniper","射击：允许狙击填充（默认开启）",2236)
     Text(content,"缺蓝的长战斗可关闭比较；短战斗和团队增益下未必更好。\n仍需手动收宠启用孤狼，插件不会自动收宠或改天赋。",16,2274,520,11,44)
+    Text(content,"自动目标估算",16,2330,520,16)
+    Text(content,"仅统计可见、确认与本队交战且在远程或近战技能范围内的怪。\n需开启敌方姓名板；不保证怪聚在同一群攻范围，也不能可靠排除控场。\n控场或分散拉怪时选“强制单体”；数据不足回退单体。\n旧版目标设置保留；首次用 /hcf targets auto 启用。\n/hcf status 查看确认数量、当前策略和回退原因。",16,2366,520,11,110)
     v.status=Text(content,"",16,2190,520,12,42)
     function v.Refresh()
         v.refreshing=true

@@ -66,7 +66,7 @@ function ns.PolicyAllows(s,k,waiting)
     end
     local conserve=s.mode=="conserve";local floor=0
     if k=="multi" or k=="volley" then
-        if s.targets<3 and not (k=="multi" and s.spec=="sv" and s.weave=="aggressive" and not conserve) then return false end
+        if s.targets<3 then return false end
         floor=conserve and 25 or 0
     elseif k=="hawk" then
         if s.spec~="bm" then return false end
