@@ -1,4 +1,4 @@
-HunterCue Forever 1.6.0 is distributed as a combined work under GPL-2.0-only.
+HunterCue Forever 1.7.0 is distributed as a combined work under GPL-2.0-only.
 Complete editable Lua source accompanies the installation ZIP. No warranty.
 The original HunterCue MIT modules retain their MIT notices and permission;
 see LICENSE-HunterCue-MIT. Copyright (c) 2026 ufolyx-niper.
@@ -33,3 +33,12 @@ Grouping behavior was researched in WeakAuras DynamicGroup; no code copied:
 https://github.com/WeakAuras/WeakAuras2/blob/main/WeakAuras/RegionTypes/DynamicGroup.lua
 Sting.lua changed 2026-11-23 by ufolyx-niper to attach the effect only to existing
 qualified refresh highlights, pad their native mask and avoid opening animation restarts.
+
+1.7.0: Hawks.lua and the guarded Totem adapter are original MIT-noticed code.
+HawkTimer 2.5.0 by Efron was inspected as a behavioral reference (slot events,
+arrival timing and cast-time fallback). No HawkTimer source/assets are copied
+or redistributed and HawkTimer is not a runtime dependency.
+Rotation reference only, no simulation source redistributed:
+https://github.com/wowsims/forever/blob/master/ui/specs/hunter/dps/apls/turret.apl.siml
+https://github.com/wowsims/forever/blob/master/ui/specs/hunter/dps/apls/turret_hawk.apl.siml
+https://github.com/Gethe/wow-ui-source/blob/forever/Interface/AddOns/Blizzard_APIDocumentationGenerated/TotemDocumentation.lua

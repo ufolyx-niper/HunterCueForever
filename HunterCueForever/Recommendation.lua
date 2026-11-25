@@ -14,6 +14,11 @@ end
 local function Valid(s,item,waiting)
     return item and s.spells[item.key] and s.spells[item.key].id==item.id and ns.ChoiceValid(s,item.key,waiting)
 end
+local function CorePreempts(s,item,out)
+    if not item or out.key==item.key or not ns.ChoiceValid(s,out.key,false) then return false end
+    return (s.spec=="bm" and item.key=="aimed" and (out.key=="hawk" or out.key=="arcane"))
+        or (s.spec=="mm" and item.key=="sniper" and (out.key=="aimed" or out.key=="arcane"))
+end
 function ns.FutureState(s,delay)
     local future={};for k,v in pairs(s) do future[k]=v end
     future.now=(s.now or 0)+delay;future.evaluateAt=future.now;future.spells={}
@@ -94,9 +99,9 @@ local function CastForecast(s,raw,m)
     local token=s.castID or s.castStartedAt
     if m.castSource~=s.castKey or m.castToken~=token then m.castItem=nil end
     m.castSource=s.castKey;m.castToken=token;m.castStartedAt=s.castStartedAt
-    local item=m.castItem
-    if s.stableRecommendations==false or not Valid(future,item,false) then
-        local out=ns.Decide(future);local allowed=false
+    local item=m.castItem;local out=ns.Decide(future)
+    if s.stableRecommendations==false or not Valid(future,item,false) or CorePreempts(future,item,out) then
+        local allowed=false
         for _,key in ipairs(ns.futureKeys) do if key==out.key then allowed=true end end
         item=allowed and ns.ChoiceValid(future,out.key,false) and {key=out.key,id=future.spells[out.key].id,reason=out.reason} or nil
     end
@@ -141,6 +146,7 @@ function ns.Recommend(s,raw,memo)
         -- transient fallback while cast-family state is still synchronizing.
         return Copy(raw)
     end
+    if CorePreempts(s,m.item,raw) then m.item=nil end
     if m.item and not Valid(s,m.item,false) then m.item=nil end
     if m.item then
         local item=m.item;local cap=item.at+2.5

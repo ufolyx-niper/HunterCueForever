@@ -47,7 +47,7 @@ local function SpellAPI(name,...)
     return Call(C_Spell and C_Spell[name],...)
 end
 ns.known={};ns.cooldownCache={};ns.fences={};ns.pending={};ns.inferred={};ns.attempts={};ns.generation=0
-ns.hawks={};ns.hawkSent={};ns.seenSuccess={}
+ns.hawks={};ns.seenSuccess={}
 local function TrimRecords(records,now)
     local count,oldest,oldestAt=0,nil,nil
     for k,v in pairs(records) do
@@ -60,31 +60,74 @@ local function TrimRecords(records,now)
     end
     if count>32 and oldest then records[oldest]=nil end
 end
-function ns.PruneHawks(now)
-    for i=#ns.hawks,1,-1 do if ns.hawks[i].expires<=now then table.remove(ns.hawks,i) end end
+function ns.ResetHawks(phase)
+    ns.hawkState=ns.HawkTracker and ns.HawkTracker.New(Now(),phase) or nil
+    ns.hawks=ns.hawkState and ns.hawkState.records or {}
 end
-function ns.ResetTracking()
+function ns.PruneHawks(now)
+    if ns.hawkState then ns.HawkTracker.Tick(ns.hawkState,now);ns.hawks=ns.hawkState.records end
+end
+function ns.SaveHawks()
+    if ns.hawkState then HunterCueHawkState=ns.HawkTracker.Export(ns.hawkState,Now(),Num(Call(GetServerTime))) end
+end
+function ns.ResetTracking(full)
     ns.cooldownCache={};ns.fences={};ns.pending={};ns.inferred={};ns.attempts={}
-    ns.hawks={};ns.hawkSent={};ns.seenSuccess={};ns.lastAuto=nil;ns.meleeSince=nil;ns.lastError=nil;ns.generation=ns.generation+1
+    if full then ns.ResetHawks(0);ns.seenSuccess={} end
+    ns.lastAuto=nil;ns.meleeSince=nil;ns.lastError=nil;ns.generation=ns.generation+1
     ns.actionSerial=(ns.actionSerial or 0)+1;ns.lastActionAt=nil;ns.lastActionKey=nil;ns.lastBurstAt=nil
     if ns.ClearRecommendation then ns.ClearRecommendation() end
 end
-function ns.ScanSpells()
-    if Call(InCombatLockdown)==true then ns.scanPending=true;ns.scanComplete=false;return end
-    ns.known={};ns.ids={}
-    local readable=true
+local function CommitSpells(known,ids,uncertain,readable)
+    local mapChanged=false
+    for key,id in pairs(known) do if ns.known[key]~=id then mapChanged=true end end
+    for key,id in pairs(ns.known) do if known[key]~=id then mapChanged=true end end
+    ns.known=known;ns.ids=ids;ns.unknownSpells=uncertain;ns.scanDegraded=not readable
+    if mapChanged or ns.talentSwitchPending then ns.ResetTracking() end
+    ns.talentSwitchPending=nil;ns.scanCandidate=nil
+    if next(known) and not known.hawk and not uncertain.hawk then ns.ResetHawks(0) end
+end
+function ns.ResolvePendingScan()
+    local c=ns.scanCandidate
+    if ns.talentSwitchPending and c and (ns.enteringCombat==true or Call(InCombatLockdown)==true) then
+        -- Use the already sanitized positive map; never keep old-talent skills
+        -- or blank the entire fight while waiting for a protected rescan.
+        CommitSpells(c.known,c.ids,c.uncertain,false);ns.scanPending=true
+    end
+end
+function ns.ScanSpells(switch)
+    local now=Now()
+    if Call(InCombatLockdown)==true then ns.scanPending=true;return end
+    if switch and not ns.talentSwitchPending then ns.talentSwitchPending=true;ns.scanTries=0;ns.ClearRecommendation() end
+    local known,ids,uncertain={},{},{};local readable=true
     for key,ranks in pairs(ns.spells) do
         local learned={}
         for _,id in ipairs(ranks) do
-            local yes,ok=Call(IsPlayerSpell,id)
-            if not ok then yes=Call(C_SpellBook and C_SpellBook.IsSpellKnown,id) end
-            if type(yes)~="boolean" then readable=false end
+            local yes=Call(IsPlayerSpell,id)
+            if type(yes)~="boolean" then yes=Call(C_SpellBook and C_SpellBook.IsSpellKnown,id) end
+            if type(yes)~="boolean" then readable=false;uncertain[key]=true end
             if yes==true then learned[id]=true end
         end
         local id=ns.SelectRank(ranks,learned)
-        if id then ns.known[key]=id;ns.ids[id]=key end
+        if id then known[key]=id;ids[id]=key end
     end
-    ns.scanPending=false;ns.scanComplete=readable and next(ns.known)~=nil;ns.ResetTracking()
+    if not next(known) then
+        -- A transient empty spellbook cannot prove a talent was unlearned.
+        readable=false;for key in pairs(ns.spells) do uncertain[key]=true end
+    end
+    ns.scanCandidate={known=known,ids=ids,uncertain=uncertain}
+    local changed=false
+    for key,id in pairs(known) do if ns.known[key]~=id then changed=true end end
+    for key in pairs(ns.known) do if not known[key] and not uncertain[key] then changed=true end end
+    ns.scanTries=(ns.scanTries or 0)+1
+    ns.scanPending=not readable;ns.scanComplete=readable and next(known)~=nil
+    if not readable and next(ns.known) and (changed or ns.talentSwitchPending) and ns.scanTries<3 then
+        ns.talentSwitchPending=true;ns.nextScan=now+.5;return
+    end
+    if readable or changed or ns.talentSwitchPending or not next(ns.known) or ns.scanTries>=3 then
+        CommitSpells(known,ids,uncertain,readable)
+    end
+    ns.nextScan=not readable and now+(ns.scanTries<3 and .5 or 5) or nil
+    if readable then ns.scanTries=0 end
     if ns.ApplyUI then ns.ApplyUI() end
     if ns.RefreshOptions then ns.RefreshOptions() end
 end
@@ -93,7 +136,51 @@ function ns.Profile()
     if ns.known.wrath then return "bm" end
     if ns.known.strider then return "sv" end
     if ns.known.sniper then return "mm" end
-    return "bm" -- basic leveling profile; unavailable talents are always filtered.
+    local u=ns.unknownSpells or {}
+    if u.wrath or u.strider or u.sniper then return "generic" end
+    return "bm"
+end
+-- Totem identities do not enter the cast-success byID map.
+local hawkIdentity={[1293248]=true,[1312639]=true}
+for _,id in ipairs(ns.spells.hawk) do hawkIdentity[id]=true end
+function ns.ReadHawkSlots(changedSlot,force)
+    if not ns.hawkState then return end
+    local now=Now()
+    if not force and ns.nextHawkScan and now<ns.nextHawkScan then ns.PruneHawks(now);return end
+    ns.nextHawkScan=now+.25
+    local count=Num(Call(GetNumTotemSlots));local complete=true
+    if not count or count<1 or count>16 or count%1~=0 then
+        count=Num(ns.Clean(MAX_TOTEMS))
+        if not count or count<1 or count>16 or count%1~=0 then count=4;complete=false end
+    end
+    local names,icons={},{}
+    for _,id in ipairs(ns.spells.hawk) do
+        local name=SpellAPI("GetSpellName",id);local icon=Num(SpellAPI("GetSpellTexture",id))
+        if type(name)=="string" then names[name]=true end
+        if icon and icon~=134400 then icons[icon]=true end
+    end
+    names.Hawk=true;names["雄鹰"]=true;names["鹰"]=true
+    local rows={}
+    for slot=1,count do
+        local row={kind="unknown"};rows[slot]=row
+        if type(GetTotemInfo)=="function" then
+            local ok,have,name,start,duration,icon,rate,id=pcall(GetTotemInfo,slot)
+            if ok then
+                have=ns.Clean(have);name=ns.Clean(name);start=Num(ns.Clean(start));duration=Num(ns.Clean(duration))
+                icon=Num(ns.Clean(icon));local rateOK;rate,rateOK=ns.Clean(rate);id=Num(ns.Clean(id))
+                if have==false then row.kind="empty"
+                elseif have==true and ((id and hawkIdentity[id]) or (type(name)=="string" and names[name]) or (icon and icons[icon])) then
+                    row.kind="hawk"
+                    if start and start>=0 and start<=now+1 then row.start=start end
+                    if duration and duration>0 and duration<=120 then row.duration=duration end
+                    if row.start and row.duration and rateOK and (rate==nil or rate==1) then row.expires=start+duration end
+                elseif have==true and id and (ns.byID[id]=="immolation" or ns.byID[id]=="explosive") then row.kind="other" end
+            end
+        end
+        if row.kind=="unknown" then complete=false end
+    end
+    ns.HawkTracker.Observe(ns.hawkState,rows,complete,Num(ns.Clean(changedSlot)),now)
+    ns.hawks=ns.hawkState.records
 end
 local function Cooldown(id)
     local info,ok=SpellAPI("GetSpellCooldown",id)
@@ -207,26 +294,20 @@ local function TargetIdentity()
 end
 function ns.TargetChanged()
     ns.generation=ns.generation+1;ns.inferred={};ns.pending={};ns.attempts={};ns.meleeSince=nil;ns.lastAuto=nil
-    ns.hawks={} -- Do not assume guardians on the previous target cover the new target.
     if ns.ClearRecommendation then ns.ClearRecommendation() end
 end
 function ns.Sent(unit,targetName,guid,id)
     unit=ns.Clean(unit);targetName=ns.Clean(targetName);guid=ns.Clean(guid);id=ns.Clean(id)
     if unit~="player" or type(guid)~="string" or type(id)~="number" then return end
     local key=ns.byID[id]
-    if key~="mark" and key~="sting" and key~="hawk" then return end
-    local hawkSent
-    if key=="hawk" then
-        hawkSent={generation=ns.generation,at=Now()};ns.hawkSent[guid]=hawkSent;TrimRecords(ns.hawkSent,Now())
-    end
+    if key~="mark" and key~="sting" then return end
     local target=TargetIdentity()
     if not target or not targetName then return end
-    if targetName~=target.name and targetName~=target.full then if hawkSent then hawkSent.invalid=true end;return end
+    if targetName~=target.name and targetName~=target.full then return end
     for _,token in ipairs({"mouseover","focus"}) do
         local otherName=Call(UnitName,token);local otherGUID=Call(UnitGUID,token)
-        if otherName==target.name and otherGUID and otherGUID~=target.guid then if hawkSent then hawkSent.invalid=true end;return end
+        if otherName==target.name and otherGUID and otherGUID~=target.guid then return end
     end
-    if hawkSent then hawkSent.target=target.guid;return end
     ns.pending[guid]={key=key,target=target.guid,generation=ns.generation,at=Now()}
     local n=0;for k,v in pairs(ns.pending) do
         n=n+1;if Now()-v.at>10 or n>16 then ns.pending[k]=nil end
@@ -241,6 +322,8 @@ function ns.Succeeded(unit,guid,id)
         if ns.seenSuccess[guid] and now-ns.seenSuccess[guid]<=10 then return end
         ns.seenSuccess[guid]=now;TrimRecords(ns.seenSuccess,now)
     end
+    if (key=="hawk" or key=="arcane") and ns.hawkState and ns.hawkState.lastSuccess
+        and now>=ns.hawkState.lastSuccess and now-ns.hawkState.lastSuccess<.15 then return end
     local isBurst=ns.burstOption[key]~=nil
     for _,k in ipairs(ns.family[key] or {key}) do ns.cooldownCache[k]=nil;ns.fences[k]=now+(isBurst and 1 or 0.25) end
     if isBurst then ns.lastBurstAt=now
@@ -248,19 +331,8 @@ function ns.Succeeded(unit,guid,id)
         ns.actionSerial=(ns.actionSerial or 0)+1;ns.lastActionAt=now
         ns.lastActionKey=(key~="mark" and key~="sting") and key or nil -- Independent monitors never occupy the spent main icon.
     end
-    if key=="hawk" then
-        local sent=type(guid)=="string" and ns.hawkSent[guid]
-        if type(guid)=="string" then ns.hawkSent[guid]=nil end
-        local target=sent and sent.target and TargetIdentity()
-        local valid=not sent or (not sent.invalid and sent.generation==ns.generation
-            and (not sent.target or (target and target.guid==sent.target)))
-        if valid then
-            ns.PruneHawks(now)
-            if #ns.hawks>=2 then table.remove(ns.hawks,1) end
-            ns.hawks[#ns.hawks+1]={arrives=now+ns.hawkFlight,expires=now+ns.hawkFlight+ns.hawkLifetime}
-        else
-            ns.hawks={} -- An off-target summon may replace one of the globally capped guardians.
-        end
+    if key=="hawk" or key=="arcane" then
+        if ns.hawkState then ns.HawkTracker.Success(ns.hawkState,key,now);ns.hawks=ns.hawkState.records;ns.SaveHawks() end
     elseif key=="auto" then ns.lastAuto=now end
     if type(guid)~="string" then return end
     local sent=ns.pending[guid];ns.pending[guid]=nil
@@ -306,10 +378,15 @@ local function ProbeRange(spells,keys)
 end
 function ns.Snapshot()
     local now=Now();local db=ns.db
-    ns.PruneHawks(now)
+    ns.ResolvePendingScan()
+    ns.ReadHawkSlots()
     local s={now=now,spells={},spec=ns.Profile(),mode=db.mode,targets=db.targets,
         cooldowns=db.cooldowns,traps=db.traps,weave=db.weave,hawks={},readiness=false,stingEnabled=db.stingEnabled}
     for _,h in ipairs(ns.hawks) do s.hawks[#s.hawks+1]={arrives=h.arrives,expires=h.expires} end
+    s.hawkPhase=ns.hawkState and ns.hawkState.phase
+    s.hawkUnknown=not ns.known.hawk and ns.unknownSpells and ns.unknownSpells.hawk
+    s.arcaneUnknown=not ns.known.arcane and ns.unknownSpells and ns.unknownSpells.arcane
+    s.scanBlocked=ns.talentSwitchPending==true;s.mmSniper=db.mmSniper
     s.generation=ns.generation;s.actionSerial=ns.actionSerial or 0
     s.lastActionAt=ns.lastActionAt;s.lastActionKey=ns.lastActionKey;s.lastBurstAt=ns.lastBurstAt
     s.selectionBlockedUntil=now
@@ -323,8 +400,12 @@ function ns.Snapshot()
     s.markReminder=db.markReminder;s.markInCombat=db.markInCombat
     s.classification=Call(UnitClassification,"target");s.targetInCombat=Call(UnitAffectingCombat,"target")
     s.inCombat=ns.enteringCombat==true or Call(InCombatLockdown)==true
-    s.playerAlive=Call(UnitIsDeadOrGhost,"player")==false
-    if not s.playerAlive then ns.hawks={};s.hawks={} end
+    local dead=Call(UnitIsDeadOrGhost,"player")
+    local feigning=Call(UnitIsFeignDeath,"player")
+    s.playerAlive=dead==false and feigning~=true
+    -- PLAYER_DEAD is authoritative. A snapshot cannot distinguish Feign Death
+    -- when the dedicated predicate is missing or protected, so retain history.
+    if dead==true and feigning==false then ns.ResetHawks(0);s.hawks={};s.hawkPhase=0 end
     s.target=Call(UnitExists,"target")==true and Call(UnitCanAttack,"player","target")==true
         and Call(UnitIsDeadOrGhost,"target")==false and Call(UnitIsPlayer,"target")==false
         and s.playerAlive
@@ -384,6 +465,12 @@ function ns.SavePosition(x,y)
 end
 function ns.LayoutLockedByCombat() return ns.enteringCombat==true or Call(InCombatLockdown)~=false end
 local function Say(text) print("|cff75c9ffHunterCue:|r "..text) end
+function ns.HawkStatus()
+    if not ns.HawkTracker then Say("请完全退出并重启游戏，加载新版雄鹰模块。");return end
+    local t=ns.hawkState;if not t then return end
+    Say("雄鹰阶段："..(t.phase==nil and "未知，等待实际施放或消失确认" or t.phase==2 and "下一发奥术" or "下一发雄鹰").." / "..t.reason)
+    for i,h in ipairs(t.records) do Say("鹰 "..i.."："..h.source.." / "..string.format("%.1f",math.max(0,h.expires-Now())).." 秒 / 槽 "..(h.slot or "未知")) end
+end
 function ns.Command(message)
     if not ns.db then Say("需要 Forever 客户端上的猎人角色。");return end
     local cmd,arg=message:lower():match("^%s*(%S*)%s*(.-)%s*$")
@@ -413,13 +500,12 @@ function ns.Command(message)
     elseif cmd=="pos" then
         local x,y=arg:match("^([+-]?%d+)%s+([+-]?%d+)$")
         if not ns.LayoutLockedByCombat() and x and y and math.abs(tonumber(x))<=4000 and math.abs(tonumber(y))<=4000 then ns.SavePosition(tonumber(x),tonumber(y)) end
+    elseif cmd=="hawks" then ns.ReadHawkSlots(nil,true);ns.HawkStatus();return
     elseif cmd=="status" then
         local s=ns.Snapshot();local count=0;for _ in pairs(ns.known) do count=count+1 end
         Say(ns.version.." / "..s.spec.." / "..s.mode.." / 已学技能组 "..count)
-        if s.spec=="bm" and s.spells.hawk then
-            local _,expires,hawks=ns.HawkCoverage(s,s.now)
-            Say("雄鹰：施放估算 "..(hawks or 0).." 只"..(expires and (" / 最短剩余 "..string.format("%.1f",expires-s.now).." 秒") or "").."，不是存活确认")
-        end
+        ns.HawkStatus()
+        if ns.scanDegraded then Say("技能扫描部分受限：仅使用确认已学技能；可手动选择专精。") end
         Say("蓝量:"..(s.mana and "可读" or "受限").." 回蓝:"..(s.regen and "可读" or "受限")
             .." 技能状态:"..(s.readiness and "可读" or "不可读").." 射程:"..(s.ranged==nil and "未知" or "可读")
             .." 钉刺:"..(s.sting==nil and "未知" or s.stingEstimated and "估算" or "可读"))
@@ -450,7 +536,7 @@ local function Register(method,event,...)
 end
 for _,event in ipairs({"PLAYER_LOGIN","PLAYER_ENTERING_WORLD","PLAYER_TARGET_CHANGED","PLAYER_DEAD",
     "SPELLS_CHANGED","PLAYER_TALENT_UPDATE","CHARACTER_POINTS_CHANGED","PLAYER_REGEN_ENABLED","PLAYER_REGEN_DISABLED",
-    "UI_SCALE_CHANGED","DISPLAY_SIZE_CHANGED","SPELL_UPDATE_COOLDOWN"}) do Register(events.RegisterEvent,event) end
+    "UI_SCALE_CHANGED","DISPLAY_SIZE_CHANGED","SPELL_UPDATE_COOLDOWN","PLAYER_TOTEM_UPDATE","PLAYER_LOGOUT","ACTIVE_TALENT_GROUP_CHANGED"}) do Register(events.RegisterEvent,event) end
 Register(events.RegisterUnitEvent,"UNIT_SPELLCAST_SENT","player")
 Register(events.RegisterUnitEvent,"UNIT_SPELLCAST_SUCCEEDED","player")
 local function Event(_,event,...)
@@ -461,7 +547,10 @@ local function Event(_,event,...)
         local ok,_,_,_,interface=pcall(GetBuildInfo)
         interface=ns.Clean(interface)
         if not ok or class~="HUNTER" or type(interface)~="number" or interface<16000 or interface>=20000 then return end
-        ns.db=ns.Settings(HunterCueForeverDB);HunterCueForeverDB=ns.db;ns.ScanSpells()
+        ns.db=ns.Settings(HunterCueForeverDB);HunterCueForeverDB=ns.db
+        ns.ResetHawks(nil)
+        if ns.HawkTracker then ns.hawkState=ns.HawkTracker.Restore(HunterCueHawkState,Now(),Num(Call(GetServerTime))) or ns.hawkState end
+        ns.hawks=ns.hawkState and ns.hawkState.records or {};ns.ScanSpells();ns.ReadHawkSlots(nil,true)
         if ns.CreateUI then ns.CreateUI() end
         if ns.InitSting then ns.InitSting() end
         if ns.InitOptions then ns.InitOptions() end
@@ -472,6 +561,7 @@ local function Event(_,event,...)
     if event=="PLAYER_REGEN_ENABLED" or event=="PLAYER_REGEN_DISABLED" then ns.layoutRefreshPending=true end
     if event=="PLAYER_REGEN_DISABLED" then
         ns.enteringCombat=true -- Lockdown can still be false inside this event callback.
+        ns.ResolvePendingScan()
         if ns.EndPreview then ns.EndPreview() end
         if ns.RefreshOptions then ns.RefreshOptions() end
     elseif event=="UI_SCALE_CHANGED" or event=="DISPLAY_SIZE_CHANGED" then
@@ -481,7 +571,14 @@ local function Event(_,event,...)
     elseif event=="UNIT_SPELLCAST_SUCCEEDED" then ns.Succeeded(...)
     elseif event=="SPELL_UPDATE_COOLDOWN" then ns.CooldownEvent()
     elseif event=="PLAYER_TARGET_CHANGED" then ns.TargetChanged()
-    elseif event=="PLAYER_DEAD" or event=="PLAYER_ENTERING_WORLD" then ns.ResetTracking()
+    elseif event=="PLAYER_LOGOUT" then ns.SaveHawks()
+    elseif event=="PLAYER_TOTEM_UPDATE" then local slot=...;ns.ReadHawkSlots(slot,true)
+    elseif event=="PLAYER_DEAD" then ns.ResetTracking(true);ns.SaveHawks()
+    elseif event=="PLAYER_ENTERING_WORLD" then
+        local initial,reloading=...;initial=ns.Clean(initial);reloading=ns.Clean(reloading)
+        if initial==true and reloading~=true then ns.ResetHawks(0) end
+        ns.ResetTracking();ns.ScanSpells();ns.ReadHawkSlots(nil,true)
+    elseif event=="ACTIVE_TALENT_GROUP_CHANGED" or event=="PLAYER_TALENT_UPDATE" then ns.ScanSpells(true)
     elseif event=="SPELLS_CHANGED" or event=="PLAYER_TALENT_UPDATE" or event=="CHARACTER_POINTS_CHANGED"
         or (event=="PLAYER_REGEN_ENABLED" and ns.scanPending) then ns.ScanSpells() end
     if event=="PLAYER_REGEN_ENABLED" and ns.RefreshOptions then ns.RefreshOptions() end
@@ -499,6 +596,7 @@ events:SetScript("OnUpdate",function(_,elapsed)
         if ns.layoutRefreshPending or locked~=ns.lastLayoutLock then
             ns.layoutRefreshPending=nil;ns.lastLayoutLock=locked;if ns.RefreshOptions then ns.RefreshOptions() end
         end
+        if ns.nextScan and Now()>=ns.nextScan and not locked then ns.ScanSpells() end
         local s=ns.Snapshot();ns.UpdateUI(s,ns.Recommend(s,ns.Decide(s)))
     end)
     if not ok then ns.ClearRecommendation();ns.lastError=true;if ns.ShowError then ns.ShowError() end end

@@ -25,20 +25,16 @@ function ns.ActionTime(s,k,waiting)
     return (s.now or 0)+delay
 end
 function ns.HawkCoverage(s,at)
-    if not at then return false end
     local count,earliest=0,nil
     for _,h in ipairs(s.hawks or {}) do
-        if h.arrives<=at+EPS and h.expires>at then
-            count=count+1;earliest=earliest and math.min(earliest,h.expires) or h.expires
-        end
+        if at and h.arrives<=at and h.expires>at then count=count+1;earliest=math.min(earliest or h.expires,h.expires) end
     end
-    -- This is a shared-CD safety window, not a guarantee of zero flight/latency gaps.
-    return count==2 and earliest>at+ns.hawkSharedWindow+ns.hawkLead+EPS,earliest,count
+    return count==2,earliest,count -- diagnostics only, never cadence eligibility
 end
 local function Core(s)
     if s.targets>=6 and s.spells.volley then return "volley" end
     if s.targets>=3 and s.spells.multi then return "multi" end
-    if s.spec=="bm" and s.spells.hawk then return "hawk" end
+    if s.spec=="bm" and s.spells.hawk then return s.hawkPhase==2 and "arcane" or "hawk" end
     if s.spec=="sv" and s.weave~="aggressive" and s.spells.aimed then return "aimed" end
     return "arcane"
 end
@@ -49,6 +45,9 @@ local function Spend(s,k,floor,waiting)
     local delay=math.max(0,(ns.ActionTime(s,k,waiting) or (s.now or 0))-(s.now or 0))
     local coreKey=Core(s);local core=s.spells[coreKey]
     local reserve=coreKey~=k and core and core.cost or 0
+    if s.spec=="bm" and s.spells.hawk and s.hawkPhase==nil then
+        reserve=math.max(s.spells.hawk.cost or 0,s.spells.arcane and s.spells.arcane.cost or 0)
+    end
     local sting=s.spells.sting
     if s.stingEnabled~=false and sting and sting.cost and
         (s.sting~=true or s.stingEstimated or not s.stingRemaining or s.stingRemaining<=delay+2) then
@@ -71,13 +70,16 @@ function ns.PolicyAllows(s,k,waiting)
         floor=conserve and 25 or 0
     elseif k=="hawk" then
         if s.spec~="bm" then return false end
-        if ns.HawkCoverage(s,ns.ActionTime(s,k,waiting)) and Ready(s,"arcane",waiting) then return false end
+        if s.hawkUnknown or s.hawkPhase==nil or (s.hawkPhase==2 and (s.spells.arcane or s.arcaneUnknown)) then return false end
         floor=conserve and 30 or 0
     elseif k=="arcane" then
         if s.spec=="bm" then
-            if s.spells.hawk and not ns.HawkCoverage(s,ns.ActionTime(s,k,waiting)) then return false end
+            if s.hawkUnknown or (s.spells.hawk and s.hawkPhase~=2) then return false end
             floor=conserve and 30 or 0
-        else floor=conserve and 15 or 0 end
+        else
+            if s.spec=="generic" and (s.spells.hawk or s.hawkUnknown) then return false end
+            floor=conserve and 15 or 0
+        end
         if s.spec=="sv" and s.weave~="aggressive" then
             local a=s.spells.aimed
             if a and (Ready(s,"aimed",false) or Ready(s,"aimed",true)) and ns.PolicyAllows(s,"aimed",waiting) then
@@ -93,19 +95,19 @@ function ns.PolicyAllows(s,k,waiting)
             floor=conserve and 15 or 0
         else floor=20 end
     elseif k=="sniper" then
-        if s.spec~="mm" then return false end
+        if s.spec~="mm" or s.mmSniper==false then return false end
         floor=conserve and 15 or 0
     else return false end
     return Spend(s,k,floor,waiting)
 end
 function ns.ChoiceValid(s,k,waiting)
-    if not s.target or s.casting or not k or not Ready(s,k,waiting) then return false end
+    if s.scanBlocked or not s.target or s.casting or not k or not Ready(s,k,waiting) then return false end
     if waiting and not ns.ActionTime(s,k,true) then return false end
     return ns.PolicyAllows(s,k,waiting)
 end
 function ns.BurstReady(s)
     local ready={}
-    if not s.cooldowns or s.playerAlive~=true then return ready end
+    if s.scanBlocked or not s.cooldowns or s.playerAlive~=true then return ready end
     for _,key in ipairs(ns.burstOrder) do
         local p=s.spells and s.spells[key]
         if s[ns.burstOption[key]]~=false and p and p.burstReady==true and (key~="wrath" or s.pet==true) then ready[key]=true end
@@ -125,6 +127,7 @@ function ns.MarkReminderReady(s)
 end
 function ns.Decide(s)
     local out={reason="等待可用技能",move=""}
+    if s.scanBlocked then out.reason="正在确认天赋与技能";return out end
     if not s.target then out.reason="选择存活的敌对目标";return out end
     if s.casting then out.reason="施法/引导中 · 不要打断";return out end
     local function Pick(k,reason)
@@ -132,7 +135,7 @@ function ns.Decide(s)
         return false
     end
     if s.spec~="sv" and s.melee==true and s.ranged==false then out.move="拉开距离，回到远程射程" end
-    if s.melee==false and s.ranged==false then out.reason="调整到技能射程";out.move="死区或距离过远：核对位置";return out end
+    if s.melee==false and s.ranged==false and not (s.spec=="mm" and s.spells.sniper and s.spells.sniper.range==true) then out.reason="调整到技能射程";out.move="死区或距离过远：核对位置";return out end
     if s.spec=="sv" and s.melee==true then
         local queued=s.spells.raptor and s.spells.raptor.queued
         if s.meleeDwell and s.meleeDwell>1.5 then
@@ -158,10 +161,12 @@ function ns.Decide(s)
         for _,k in ipairs(order) do if Pick(k,"群体优先 · 注意控场目标") then return out end end
     end
     if s.spec=="bm" then
-        if Pick("arcane","双鹰估时覆盖下一共享冷却 · 奥术") or Pick("hawk","补充雄鹰 · 按逐只施放估时")
+        if Pick("arcane","两鹰一奥术 · 奥术阶段") or Pick("hawk","两鹰一奥术 · 雄鹰阶段")
             or Pick("aimed","瞄准填充") then return out end
     elseif s.spec=="mm" then
         if Pick("arcane","奥术优先") or Pick("aimed","瞄准射击") or Pick("sniper","狙击填充") then return out end
+    elseif s.spec=="generic" then
+        if Pick("arcane","专精待确认 · 通用远程") or Pick("aimed","专精待确认 · 瞄准") then return out end
     elseif s.spec=="sv" then
         if Pick("aimed","常规穿插 · 瞄准窗口") or Pick("arcane","远程瞬发窗口") or Pick("multi","积极穿插 · 多重窗口") then return out end
     end

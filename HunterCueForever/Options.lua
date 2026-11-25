@@ -88,7 +88,7 @@ local function BuildCanvas(parent)
     local panel=CreateFrame("Frame",nil,parent);panel:Hide()
     local scroll=CreateFrame("ScrollFrame",nil,panel,"UIPanelScrollFrameTemplate")
     scroll:SetPoint("TOPLEFT",0,0);scroll:SetPoint("BOTTOMRIGHT",-28,0)
-    local content=CreateFrame("Frame",nil,scroll);content:SetSize(560,2234);scroll:SetScrollChild(content)
+    local content=CreateFrame("Frame",nil,scroll);content:SetSize(560,2330);scroll:SetScrollChild(content)
     local v={panel=panel,controls={},layoutControls={},numericControls={},refreshing=false};ns.optionViews[#ns.optionViews+1]=v
     local c=v.controls
     Text(content,"HunterCue Forever · 设置",16,12,520,20,28)
@@ -212,10 +212,12 @@ local function BuildCanvas(parent)
         if ns.LayoutLockedByCombat() then return end
         if ns.resetArmed then ns.ResetAll() else ns.resetArmed=true;ns.RefreshOptions() end
     end);v.layoutControls[#v.layoutControls+1]=c.reset
+    Check("mmSniper","射击：允许狙击填充（默认开启）",2236)
+    Text(content,"缺蓝的长战斗可关闭比较；短战斗和团队增益下未必更好。\n仍需手动收宠启用孤狼，插件不会自动收宠或改天赋。",16,2274,520,11,44)
     v.status=Text(content,"",16,2190,520,12,42)
     function v.Refresh()
         v.refreshing=true
-        for _,k in ipairs({"enabled","locked","cooldowns","traps","markInCombat","stableRecommendations","burstRacial","burstRapid","burstWrath","stingEnabled","stingIdle","stingOpening","stingSkipElementals","burstGlow","stingGlow"}) do c[k]:SetChecked(ns.db[k]) end
+        for _,k in ipairs({"enabled","locked","cooldowns","traps","markInCombat","stableRecommendations","burstRacial","burstRapid","burstWrath","stingEnabled","stingIdle","stingOpening","stingSkipElementals","burstGlow","stingGlow","mmSniper"}) do c[k]:SetChecked(ns.db[k]) end
         for k in pairs(enums) do c[k]:SetText(labels[ns.db[k]]) end
         for _,k in ipairs({"mainSize","burstSize","burstSpacing","stingSize"}) do c[k]:SetValue(ns.db[k]);c[k.."Label"]:SetText(ns.db[k].." px") end
         c.x:SetText(string.format("%.1f",ns.db.x));c.y:SetText(string.format("%.1f",ns.db.y))

@@ -1,6 +1,6 @@
 -- SPDX-License-Identifier: MIT
 local _, ns = ...
-ns.version = "1.6.0"
+ns.version = "1.7.0"
 -- Rank order is explicit. Spell IDs are facts checked against WoWSims Forever
 -- 00fecd9c spell_data_auto_gen.go; never sort by ID or localized rank text.
 ns.spells = {
@@ -24,14 +24,12 @@ ns.burstOrder={"berserking","rapid","wrath"}
 ns.reminderOrder={"berserking","rapid","wrath","mark"}
 ns.burstOption={berserking="burstRacial",rapid="burstRapid",wrath="burstWrath"}
 ns.futureKeys={"hawk","arcane","aimed","sniper","multi","volley"}
--- Observed-cast estimates, not live guardian counts. All four Hawk ranks have cap 2.
-ns.hawkFlight=1;ns.hawkLifetime=18;ns.hawkSharedWindow=6;ns.hawkLead=.2
 ns.meleeSpell = {raptor=true, mongoose=true, strider=true, immolation=true, explosive=true}
 ns.family = {hawk={"hawk","arcane"}, arcane={"hawk","arcane"},
     aimed={"aimed","multi"}, multi={"aimed","multi"},
     immolation={"immolation","explosive"}, explosive={"immolation","explosive"}}
 ns.defaults = {spec="auto", mode="balanced", targets=1, cooldowns=true,
-    traps=false, weave="normal", enabled=true, locked=false, x=36, y=-80,
+    mmSniper=true,traps=false, weave="normal", enabled=true, locked=false, x=36, y=-80,
     mainSize=56,burstSize=32,burstSpacing=8,rowGap=12,iconLayoutVersion=1,
     burstX=-24,burstY=-136,burstDirection="right",groupLayoutVersion=0,burstGlow=true,stingGlow=true,
     visibility="target",layoutVersion=2,displayVersion=2,
