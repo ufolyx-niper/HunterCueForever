@@ -1,5 +1,5 @@
 -- SPDX-License-Identifier: MIT
--- Icon-only surface. All instructions and diagnostics belong to Options/chat.
+-- Icon surface with optional native waiting numbers; no explanatory HUD text.
 local _,ns=...
 local root,group,mainButton,icon,cd
 local buttons,slots={},{}
@@ -27,7 +27,14 @@ local function Render()
             icon:SetTexture(ns.SpellIcon(key));displayedKey=key;displayedID=id
         end
         icon:SetDesaturated(not preview and (lastOutput.wait==true or lastOutput.settling==true))
-        if preview then cd:Clear() else ns.DrawCooldown(cd,key) end
+        ns.DrawMainCooldown(cd,key,lastState,lastOutput,preview)
+        local font=cd.GetCountdownFontString and cd:GetCountdownFontString()
+        if font and font.GetFont and font.SetFont and (font~=cd.hcfFontObject or cd.hcfFontSize~=ns.db.previewFontSize) then
+            local path,_,flags=font:GetFont()
+            if path and font:SetFont(path,ns.db.previewFontSize,flags)~=false then
+                cd.hcfFontObject=font;cd.hcfFontSize=ns.db.previewFontSize
+            end
+        end
     else cd:Clear();displayedKey=nil;displayedID=nil end
     if preview and not wasPreview then root:Raise() end
     wasPreview=preview

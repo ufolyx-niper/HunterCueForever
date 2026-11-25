@@ -4,7 +4,7 @@ local _,ns=...
 local EPS=0.000001
 local function Ready(s,k,waiting)
     local p=s.spells[k]
-    if not p or p.oom==true then return false end
+    if not p or p.oom==true or p.blocked or p.syncing then return false end
     if waiting then if p.usable~=true then return false end
     elseif p.ready~=true then return false end
     if s.mana and p.cost and s.mana<p.cost then return false end

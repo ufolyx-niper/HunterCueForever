@@ -48,6 +48,7 @@ local function SpellAPI(name,...)
     return Call(C_Spell and C_Spell[name],...)
 end
 ns.known={};ns.cooldownCache={};ns.fences={};ns.pending={};ns.inferred={};ns.attempts={};ns.generation=0
+ns.usableHistory={};ns.gcdPreviewSamples=0
 ns.hawks={};ns.seenSuccess={}
 local function TrimRecords(records,now)
     local count,oldest,oldestAt=0,nil,nil
@@ -72,6 +73,7 @@ function ns.SaveHawks()
     if ns.hawkState then HunterCueHawkState=ns.HawkTracker.Export(ns.hawkState,Now(),Num(Call(GetServerTime))) end
 end
 function ns.ResetTracking(full)
+    ns.usableHistory={}
     ns.cooldownCache={};ns.fences={};ns.pending={};ns.inferred={};ns.attempts={}
     if full then ns.ResetHawks(0);ns.seenSuccess={} end
     ns.lastAuto=nil;ns.meleeSince=nil;ns.lastError=nil;ns.generation=ns.generation+1
@@ -204,16 +206,21 @@ function ns.CooldownEvent()
         ns.cooldownCache[key]={id=id,stamp=now,gcd=Field(info,"isOnGCD")}
     end
 end
+local function Duration(id,ignoreGCD)
+    local object=SpellAPI("GetSpellCooldownDuration",id,ignoreGCD)
+    if not object then return nil,nil,nil end
+    local zero=Call(function() return object:IsZero() end)
+    local remaining=Num(Call(function() return object:GetRemainingDuration() end))
+    if remaining and remaining<0 then remaining=nil end
+    if type(zero)~="boolean" then zero=nil end
+    return object,zero,remaining
+end
 local function Availability(key,id,gcd,now)
     local usable,oom,ok=Pair(C_Spell and C_Spell.IsSpellUsable,id)
-    if not ok then return nil,nil,nil,nil,nil end
-    if usable~=true or oom==true then return false,nil,oom,usable,false end
-    if ns.fences[key] and now<ns.fences[key] then return false,nil,oom,usable,false end
     local cd=Cooldown(id);local remaining=Remaining(cd,now)
-    if cd.enabled==false then return false,remaining,oom,usable,false end
-    if cd.enabled~=true then return nil,remaining,oom,usable,nil end
-    if cd.active==false then return true,0,oom,usable,true end
-    if cd.active~=true then return nil,remaining,oom,usable,nil end
+    local main=false;for _,k in ipairs(ns.futureKeys) do if k==key then main=true end end
+    local object,zero,ownRemaining
+    if main then object,zero,ownRemaining=Duration(id,true) end
     local gcdOnly=false
     if gcd.active==true then
         if cd.start and cd.duration and cd.rate and gcd.start and gcd.duration and gcd.rate then
@@ -223,10 +230,36 @@ local function Availability(key,id,gcd,now)
             gcdOnly=cache and cache.id==id and now-cache.stamp<=2 and cache.gcd==true or false
         end
     end
-    local gcdRemaining=Remaining(gcd,now)
-    -- Forecast applies ONLY to the main next action, never to the burst row.
+    local facts={ownDuration=object,syncing=ns.fences[key]~=nil and now<ns.fences[key]}
+    if zero==true then remaining=0;gcdOnly=gcd.active==true;facts.ownClear=true;facts.ownActive=false
+    elseif zero==false then
+        facts.ownClear=false;facts.ownActive=true
+        -- The ordinary timer may be reporting only GCD. A native nonzero
+        -- own cooldown outranks that classification, including stale flags.
+        remaining=ownRemaining or (not gcdOnly and remaining or nil);gcdOnly=false
+    else
+        if ownRemaining then remaining=ownRemaining end
+        if gcdOnly or cd.active==false then facts.ownClear=true;facts.ownActive=false
+        elseif cd.active==true then facts.ownClear=false;facts.ownActive=true end
+    end
+    facts.blocked=not ok or cd.enabled~=true or facts.syncing
+    local previous=ns.usableHistory[key]
+    if main and usable==true and oom==false and not facts.blocked then
+        ns.usableHistory[key]={id=id,at=now}
+    elseif main and usable==false and oom==false and ok and gcd.active==true and gcdOnly and not facts.blocked
+        and previous and previous.id==id and now>=previous.at and now-previous.at<=2.5 then
+        facts.gcdPreview=true;ns.gcdPreviewSamples=ns.gcdPreviewSamples+1
+    elseif main then ns.usableHistory[key]=nil end
+    -- Keep the live usability fact false. Only the separate preview clone may
+    -- use gcdPreview, and only until this GCD ends and facts are read again.
+    if not ok then return nil,remaining,oom,usable,nil,facts end
+    if usable~=true or oom==true or facts.syncing or cd.enabled==false then return false,remaining,oom,usable,false,facts end
+    if cd.enabled~=true then return nil,remaining,oom,usable,nil,facts end
+    if facts.ownClear then return true,0,oom,usable,true,facts end
+    if cd.active~=true and facts.ownActive~=true then return nil,remaining,oom,usable,nil,facts end
+    local gcdRemaining=gcd.remaining or Remaining(gcd,now)
     local future=gcd.active==true and remaining and gcdRemaining and remaining<=gcdRemaining+0.001
-    return gcdOnly or future or false,remaining,oom,usable,gcdOnly
+    return gcdOnly or future or false,remaining,oom,usable,gcdOnly,facts
 end
 -- Burst reminders describe OWN cooldown readiness, not the next main action.
 -- A readable native ignore-GCD result outranks timing/cache heuristics.
@@ -294,6 +327,7 @@ local function TargetIdentity()
     return {guid=guid,name=name,full=type(realm)=="string" and realm~="" and name.."-"..realm or name}
 end
 function ns.TargetChanged()
+    ns.usableHistory={}
     ns.generation=ns.generation+1;ns.inferred={};ns.pending={};ns.attempts={};ns.meleeSince=nil;ns.lastAuto=nil
     if ns.ClearRecommendation then ns.ClearRecommendation() end
 end
@@ -553,14 +587,17 @@ function ns.Snapshot()
     local _,regen=Pair(GetManaRegen);s.regen=Num(regen)
     s.pet=Call(UnitExists,"pet")==true and Call(UnitIsDeadOrGhost,"pet")==false
     local gcd=Cooldown(61304)
-    s.gcd=gcd.active==true;s.gcdKnown=gcd.active~=nil;s.gcdStart=gcd.start;s.gcdRemaining=Remaining(gcd,now)
+    local gcdObject,_,gcdTime=Duration(61304,false)
+    gcd.remaining=gcdTime or Remaining(gcd,now)
+    s.gcd=gcd.active==true;s.gcdKnown=gcd.active~=nil;s.gcdStart=gcd.start;s.gcdRemaining=gcd.remaining;s.gcdDuration=gcdObject
     for key,id in pairs(ns.known) do
-        local ready,remaining,oom,usable,burstReady=Availability(key,id,gcd,now)
+        local ready,remaining,oom,usable,burstReady,facts=Availability(key,id,gcd,now)
         local burstReason
         if ns.burstOption[key] then burstReady,burstReason=BurstAvailability(key,id,gcd,now,usable,oom) end
         local range=SpellAPI("IsSpellInRange",id,"target")
         s.spells[key]={id=id,ready=ready,remaining=remaining,oom=oom,range=range,usable=usable,burstReady=burstReady,burstReason=burstReason,
             queued=Call(IsCurrentSpell,id),cost=Cost(id)}
+        for k,v in pairs(facts or {}) do s.spells[key][k]=v end
         if key~="auto" and ready~=nil then s.readiness=true end
     end
     s.melee=ProbeRange(s.spells,{"raptor","mongoose","strider"})
@@ -593,6 +630,29 @@ function ns.DrawCooldown(frame,key)
         end
     end
     frame:Clear()
+end
+function ns.DrawMainCooldown(frame,key,s,out,preview)
+    local now=s.now or Now();local remaining=out.waitRemaining
+    if preview then remaining=2 end
+    local shown=false
+    if (out.wait or preview) and type(remaining)=="number" and remaining>0 then
+        local timerKey=key..":"..tostring(ns.known[key] or 0)
+        local ending=now+remaining
+        if preview then timerKey="preview";ending=now+2 end
+        if frame.hcfTimerKey~=timerKey or not frame.hcfTimerEnd or math.abs(frame.hcfTimerEnd-ending)>.05 then
+            frame.hcfTimerKey=timerKey;frame.hcfTimerEnd=ending;frame.hcfTimerStart=now
+        end
+        shown=pcall(frame.SetCooldown,frame,frame.hcfTimerStart,frame.hcfTimerEnd-frame.hcfTimerStart)
+    else
+        frame.hcfTimerKey=nil;frame.hcfTimerEnd=nil;frame.hcfTimerStart=nil
+        local p=s.spells and s.spells[key]
+        local object=out.waitSource=="gcd" and s.gcdDuration or out.waitSource=="own" and p and p.ownDuration
+        if out.wait and object and frame.SetCooldownFromDurationObject then
+            shown=pcall(frame.SetCooldownFromDurationObject,frame,object)
+        end
+    end
+    if not shown then frame:Clear() end
+    frame:SetHideCountdownNumbers(not (ns.db.previewNumbers and shown and (out.wait or preview)))
 end
 function ns.SavePosition(x,y)
     ns.db.x=x;ns.db.y=y
@@ -640,6 +700,11 @@ function ns.Command(message)
         local s=ns.Snapshot();local count=0;for _ in pairs(ns.known) do count=count+1 end
         Say(ns.version.." / "..s.spec.." / "..s.mode.." / 已学技能组 "..count)
         Say(ns.TargetStatusText())
+        local nextAction=ns.Recommend(s,ns.Decide(s),ns.CopyRecommendationState())
+        Say("下一技能："..(nextAction.key and nextAction.key~="auto" and ns.SpellName(nextAction.key) or "未确认")
+            ..(nextAction.waitRemaining and (" / 等待 "..string.format("%.1f",nextAction.waitRemaining).." 秒")
+                or nextAction.wait and " / 等待时间不可计算" or "")
+            .." / "..(nextAction.reason or "等待").." / GCD条件预告采样 "..ns.gcdPreviewSamples)
         ns.HawkStatus()
         if ns.scanDegraded then Say("技能扫描部分受限：仅使用确认已学技能；可手动选择专精。") end
         Say("蓝量:"..(s.mana and "可读" or "受限").." 回蓝:"..(s.regen and "可读" or "受限")

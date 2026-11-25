@@ -5,7 +5,7 @@ local enums={spec={"auto","bm","mm","sv"},mode={"balanced","conserve","burst"},
     targets={0,1,3,6},visibility={"always","target","combat"},weave={"normal","aggressive"},markReminder={"off","priority","all"},burstDirection={"right","left"}}
 local labels={right="向右展开",left="向左展开",auto="自动识别",bm="兽王",mm="射击",sv="生存 weaving",balanced="均衡",conserve="省蓝",burst="全力",
     always="始终显示",target="有敌对目标时",combat="仅战斗中",normal="常规穿插",aggressive="积极穿插",off="关闭",priority="精英 / 首领（推荐）",all="所有敌对目标",[0]="自动估算",[1]="强制单体",[3]="强制 3+ 目标",[6]="强制 6+ 目标"}
-local layoutFields={x=true,y=true,mainSize=true,burstSize=true,burstSpacing=true,rowGap=true,locked=true,stingSize=true,stingX=true,stingY=true,burstDirection=true}
+local layoutFields={x=true,y=true,mainSize=true,burstSize=true,burstSpacing=true,rowGap=true,locked=true,stingSize=true,stingX=true,stingY=true,burstDirection=true,previewFontSize=true}
 for key in pairs(ns.positionKeys) do layoutFields[key]=true end
 local function ValidNumber(v) return type(v)=="number" and v==v and math.abs(v)<1e10 end
 local function Refresh()
@@ -89,7 +89,7 @@ local function BuildCanvas(parent)
     local panel=CreateFrame("Frame",nil,parent);panel:Hide()
     local scroll=CreateFrame("ScrollFrame",nil,panel,"UIPanelScrollFrameTemplate")
     scroll:SetPoint("TOPLEFT",0,0);scroll:SetPoint("BOTTOMRIGHT",-28,0)
-    local content=CreateFrame("Frame",nil,scroll);content:SetSize(560,2500);scroll:SetScrollChild(content)
+    local content=CreateFrame("Frame",nil,scroll);content:SetSize(560,2760);scroll:SetScrollChild(content)
     local v={panel=panel,controls={},layoutControls={},numericControls={},refreshing=false};ns.optionViews[#ns.optionViews+1]=v
     local c=v.controls
     Text(content,"HunterCue Forever · 设置",16,12,520,20,28)
@@ -217,12 +217,16 @@ local function BuildCanvas(parent)
     Text(content,"缺蓝的长战斗可关闭比较；短战斗和团队增益下未必更好。\n仍需手动收宠启用孤狼，插件不会自动收宠或改天赋。",16,2274,520,11,44)
     Text(content,"自动目标估算",16,2330,520,16)
     Text(content,"仅统计可见、确认与本队交战且在远程或近战技能范围内的怪。\n需开启敌方姓名板；不保证怪聚在同一群攻范围，也不能可靠排除控场。\n控场或分散拉怪时选“强制单体”；数据不足回退单体。\n旧版目标设置保留；首次用 /hcf targets auto 启用。\n/hcf status 查看确认数量、当前策略和回退原因。",16,2366,520,11,110)
+    Text(content,"下一技能 · 公共 CD 与空档预告",16,2500,520,16)
+    Check("previewNumbers","大图标显示等待秒数（默认开启）",2538)
+    Slider("previewFontSize","等待数字字号 · 10–48 px",2576,10,48,1)
+    Text(content,"灰色：下一技能尚需等待；彩色：当前条件允许。\n数字取实际行动等待时间；受限时可能只有原生转圈或没有数字。\n空档预告最多向前计算10秒；不能确认下一技能时不猜测。\n若不显示数字，请检查游戏的冷却数字显示选项。",16,2644,520,11,90)
     v.status=Text(content,"",16,2190,520,12,42)
     function v.Refresh()
         v.refreshing=true
-        for _,k in ipairs({"enabled","locked","cooldowns","traps","markInCombat","stableRecommendations","burstRacial","burstRapid","burstWrath","stingEnabled","stingIdle","stingOpening","stingSkipElementals","burstGlow","stingGlow","mmSniper"}) do c[k]:SetChecked(ns.db[k]) end
+        for _,k in ipairs({"enabled","locked","cooldowns","traps","markInCombat","stableRecommendations","burstRacial","burstRapid","burstWrath","stingEnabled","stingIdle","stingOpening","stingSkipElementals","burstGlow","stingGlow","mmSniper","previewNumbers"}) do c[k]:SetChecked(ns.db[k]) end
         for k in pairs(enums) do c[k]:SetText(labels[ns.db[k]]) end
-        for _,k in ipairs({"mainSize","burstSize","burstSpacing","stingSize"}) do c[k]:SetValue(ns.db[k]);c[k.."Label"]:SetText(ns.db[k].." px") end
+        for _,k in ipairs({"mainSize","burstSize","burstSpacing","stingSize","previewFontSize"}) do c[k]:SetValue(ns.db[k]);c[k.."Label"]:SetText(ns.db[k].." px") end
         c.x:SetText(string.format("%.1f",ns.db.x));c.y:SetText(string.format("%.1f",ns.db.y))
         for _,k in ipairs({"burstX","burstY","stingX","stingY","stingRefreshTime","stingOpeningHealth"}) do
             c[k].inputDirty=false
