@@ -7,6 +7,11 @@ local layout
 local lastState,lastOutput={},{}
 local displayedKey,displayedID,wasPreview
 local renderFault=false
+local trackingIcon
+function ns.HideTracking()
+    lastState.trackingIcon=nil
+    if trackingIcon then trackingIcon:Hide() end
+end
 local function Render()
     if not root then return end
     if ns.RefreshEditControls then ns.RefreshEditControls() end
@@ -37,6 +42,10 @@ local function Render()
             end
         end
     else ns.unknownClock:Hide();cd:Clear();displayedKey=nil;displayedID=nil end
+    local texture=preview and 132328 or lastState.trackingIcon
+    if visible and ns.db.trackingReminder and texture then
+        trackingIcon:SetTexture(texture);trackingIcon:Show()
+    else trackingIcon:Hide() end
     if preview and not wasPreview then root:Raise() end
     wasPreview=preview
     local ready=ns.BurstReady(lastState);ready.mark=ns.MarkReminderReady(lastState)
@@ -60,6 +69,14 @@ function ns.ApplyUI()
     if not ns.dragging then root:SetScale(fit);root:ClearAllPoints();root:SetPoint("CENTER",UIParent,"CENTER",ax,ay) end
     mainButton:SetSize(ns.db.mainSize,ns.db.mainSize);mainButton:ClearAllPoints()
     mainButton:SetPoint("TOPLEFT",root,"TOPLEFT",layout.mainX,0)
+    local side=ns.db.trackingSide
+    local reach=(ns.db.mainSize/2+4+ns.db.trackingSize)*fit
+    local halfWidth=UIParent:GetWidth()/2
+    if side=="right" and x+reach>halfWidth then side="left"
+    elseif side=="left" and x-reach < -halfWidth then side="right" end
+    trackingIcon:SetSize(ns.db.trackingSize,ns.db.trackingSize);trackingIcon:ClearAllPoints()
+    if side=="right" then trackingIcon:SetPoint("LEFT",mainButton,"RIGHT",4,0)
+    else trackingIcon:SetPoint("RIGHT",mainButton,"LEFT",-4,0) end
     if not ns.groupDragging then
         slots=ns.ReminderSlots(ns.db,ns.known)
         local gl=ns.GroupLayout(ns.db,#slots);ns.groupLayout=gl
@@ -117,6 +134,7 @@ function ns.CreateUI()
     end)
     mainButton=CreateFrame("Button",nil,root);ns.mainButton=mainButton
     mainButton:RegisterForClicks("RightButtonUp");mainButton:SetScript("OnClick",OpenSettings)
+    trackingIcon=root:CreateTexture(nil,"ARTWORK");ns.trackingIcon=trackingIcon;trackingIcon:Hide()
     icon=mainButton:CreateTexture(nil,"ARTWORK");mainButton.icon=icon;icon:SetAllPoints(mainButton);icon:SetTexCoord(.08,.92,.08,.92)
     cd=CreateFrame("Cooldown",nil,mainButton,"CooldownFrameTemplate");cd:SetAllPoints(mainButton);ns.mainCooldown=cd
     local overlay=CreateFrame("Frame",nil,mainButton)

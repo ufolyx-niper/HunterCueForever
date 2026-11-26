@@ -543,6 +543,75 @@ function ns.TargetStatusText()
         .." / 当前策略 "..t.effective.." / "..t.reason
         ..((t.unknown or 0)>0 and " / 未确认 "..t.unknown or "")..(t.partial and " / 部分采样" or "")
 end
+-- Creature type ID -> hunter tracking spell ID. Read the active build independently
+-- of the rotation profile, since MM and BM hunters can purchase Survival talents.
+local trackingSpells={[1]=1494,[2]=19879,[3]=19878,[4]=19880,[5]=19882,[6]=19884,[7]=19883}
+local trackingCache={}
+local function ImprovedTracking()
+    local spec=C_SpecializationInfo
+    local config
+    if spec and spec.GetActiveSpecGroup and spec.GetCombatConfigIDForSpecGroup then
+        local group,ok=Call(spec.GetActiveSpecGroup)
+        if not ok then return false end
+        if type(group)=="number" then
+            config,ok=Call(spec.GetCombatConfigIDForSpecGroup,group)
+            if not ok then return false end
+        end
+    end
+    if config==nil then config=Call(C_ClassTalents and C_ClassTalents.GetActiveConfigID) end
+    if not Num(config) or config<=0 then return false end
+    local node=Call(C_Traits and C_Traits.GetNodeInfo,config,104996)
+    local rank=Num(Field(node,"activeRank"))
+    return Field(node,"ID")==104996 and Field(Field(node,"activeEntry"),"entryID")==129660
+        and rank~=nil and rank>=1 and rank<=5 and rank==math.floor(rank)
+end
+local function MissingTracking(spell)
+    local map=C_Minimap
+    local count=Num(Call(map and map.GetNumTrackingTypes))
+    if not count or count<1 or count>128 or count~=math.floor(count) then return nil end
+    local icon
+    for i=1,count do
+        local row=Call(map.GetTrackingInfo,i)
+        if type(row)~="table" then return nil end
+        local id,ok=Field(row,"spellID")
+        if not ok then return nil end
+        if id==spell then
+            -- A matching entry in the player's own tracking menu establishes
+            -- availability. A duplicate, unreadable flag or active entry cancels it.
+            if icon or Field(row,"active")~=false then return nil end
+            icon=Num(Field(row,"texture"))
+            if not icon or icon<=0 then return nil end
+        end
+    end
+    return icon
+end
+function ns.InvalidateTracking(talent)
+    trackingCache.nextScan=nil;trackingCache.icon=nil
+    if talent then trackingCache.nextTalent=nil end
+    if ns.HideTracking then ns.HideTracking() end
+end
+function ns.TrackingIcon(s)
+    if not ns.db.trackingReminder or not s.target or s.scanBlocked then
+        trackingCache.nextScan=nil
+        return nil
+    end
+    local _,kind=Pair(UnitCreatureType,"target")
+    local spell=trackingSpells[kind]
+    if not spell then trackingCache.nextScan=nil;return nil end
+    local now=s.now
+    if not trackingCache.nextTalent or now>=trackingCache.nextTalent then
+        trackingCache.talented=ImprovedTracking()
+        trackingCache.nextTalent=now+2
+    end
+    if not trackingCache.talented then trackingCache.nextScan=nil;return nil end
+    if trackingCache.spell~=spell or not trackingCache.nextScan or now>=trackingCache.nextScan then
+        trackingCache.icon=MissingTracking(spell)
+        trackingCache.spell=spell;trackingCache.nextScan=now+.25
+    end
+    return trackingCache.icon
+end
+local trackingTalentEvents={PLAYER_ENTERING_WORLD=true,PLAYER_TALENT_UPDATE=true,ACTIVE_TALENT_GROUP_CHANGED=true,
+    CHARACTER_POINTS_CHANGED=true,SPELLS_CHANGED=true,TRAIT_CONFIG_UPDATED=true,TRAIT_CONFIG_LIST_UPDATED=true}
 function ns.Snapshot()
     local now=Now();local db=ns.db
     ns.ResolvePendingScan()
@@ -576,6 +645,7 @@ function ns.Snapshot()
     s.target=Call(UnitExists,"target")==true and Call(UnitCanAttack,"player","target")==true
         and Call(UnitIsDeadOrGhost,"target")==false and Call(UnitIsPlayer,"target")==false
         and s.playerAlive
+    s.trackingIcon=ns.TrackingIcon(s)
     local cast,castOK,castKey,castRemaining,castStartedAt,castID=CastInfo(now)
     local channel,channelOK=Call(UnitChannelInfo,"player")
     s.casting=not castOK or not channelOK or cast~=nil or channel~=nil
@@ -756,7 +826,7 @@ end
 for _,event in ipairs({"PLAYER_LOGIN","PLAYER_ENTERING_WORLD","PLAYER_TARGET_CHANGED","PLAYER_DEAD",
     "SPELLS_CHANGED","PLAYER_TALENT_UPDATE","CHARACTER_POINTS_CHANGED","PLAYER_REGEN_ENABLED","PLAYER_REGEN_DISABLED",
     "UI_SCALE_CHANGED","DISPLAY_SIZE_CHANGED","SPELL_UPDATE_COOLDOWN","PLAYER_TOTEM_UPDATE","PLAYER_LOGOUT","ACTIVE_TALENT_GROUP_CHANGED",
-    "GROUP_ROSTER_UPDATE","UNIT_PET"}) do Register(events.RegisterEvent,event) end
+    "GROUP_ROSTER_UPDATE","UNIT_PET","MINIMAP_UPDATE_TRACKING","TRAIT_CONFIG_UPDATED","TRAIT_CONFIG_LIST_UPDATED"}) do Register(events.RegisterEvent,event) end
 Register(events.RegisterUnitEvent,"UNIT_SPELLCAST_SENT","player")
 Register(events.RegisterUnitEvent,"UNIT_SPELLCAST_SUCCEEDED","player")
 local function Event(_,event,...)
@@ -777,6 +847,9 @@ local function Event(_,event,...)
         return
     end
     if not ns.db then return end
+    if trackingTalentEvents[event] or event=="PLAYER_TARGET_CHANGED" or event=="MINIMAP_UPDATE_TRACKING" then
+        ns.InvalidateTracking(trackingTalentEvents[event])
+    end
     if event=="GROUP_ROSTER_UPDATE" or event=="UNIT_PET" then ns.ResetTargets(false);return end
     if event=="PLAYER_TARGET_CHANGED" then
         ns.ResetTargets(false)

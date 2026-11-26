@@ -1,6 +1,6 @@
 -- SPDX-License-Identifier: MIT
 local _, ns = ...
-ns.version = "1.9.1"
+ns.version = "1.10.0"
 -- Rank order is explicit. Spell IDs are facts checked against WoWSims Forever
 -- 00fecd9c spell_data_auto_gen.go; never sort by ID or localized rank text.
 ns.spells = {
@@ -29,7 +29,7 @@ ns.family = {hawk={"hawk","arcane"}, arcane={"hawk","arcane"},
     aimed={"aimed","multi"}, multi={"aimed","multi"},
     immolation={"immolation","explosive"}, explosive={"immolation","explosive"}}
 ns.defaults = {spec="auto", mode="balanced", targets=0, cooldowns=true,
-    previewNumbers=true,previewFontSize=22,
+    trackingReminder=true,trackingSize=28,trackingSide="right",previewNumbers=true,previewFontSize=22,
     mmSniper=true,traps=false, weave="normal", enabled=true, locked=false, x=36, y=-80,
     mainSize=56,burstSize=32,burstSpacing=8,rowGap=12,iconLayoutVersion=1,
     burstX=-24,burstY=-136,burstDirection="right",groupLayoutVersion=0,burstGlow=true,stingGlow=true,
@@ -42,8 +42,9 @@ ns.optionBounds={mainSize={24,160},burstSize={12,96},burstSpacing={0,40},rowGap=
 ns.optionBounds.stingX={-4000,4000};ns.optionBounds.stingY={-4000,4000};ns.optionBounds.stingSize={16,128}
 ns.optionBounds.stingRefreshTime={1,60};ns.optionBounds.stingOpeningHealth={1,10000000}
 ns.optionBounds.burstX={-4000,4000};ns.optionBounds.burstY={-4000,4000}
+ns.optionBounds.trackingSize={16,64}
 ns.optionBounds.previewFontSize={10,48}
-ns.layoutKeys={"x","y","mainSize","burstSize","burstSpacing","rowGap","stingX","stingY","stingSize","burstX","burstY","burstDirection","previewFontSize"}
+ns.layoutKeys={"x","y","mainSize","burstSize","burstSpacing","rowGap","stingX","stingY","stingSize","burstX","burstY","burstDirection","previewFontSize","trackingSize","trackingSide"}
 ns.positionKeys={x=true,y=true,stingX=true,stingY=true,burstX=true,burstY=true}
 for i,key in ipairs(ns.reminderOrder) do
     for _,axis in ipairs({"X","Y"}) do
@@ -68,6 +69,7 @@ function ns.Settings(raw)
         or (out.targets~=0 and out.targets~=1 and out.targets~=3 and out.targets~=6) then out.targets=1 end
     if out.weave~="normal" and out.weave~="aggressive" then out.weave="normal" end
     if out.markReminder~="off" and out.markReminder~="priority" and out.markReminder~="all" then out.markReminder="priority" end
+    if out.trackingSide~="left" then out.trackingSide="right" end
     if out.burstDirection~="left" and out.burstDirection~="right" then out.burstDirection="right" end
     out.groupLayoutVersion=raw.groupLayoutVersion==1 and 1 or 0
     local function Number(v,fallback)

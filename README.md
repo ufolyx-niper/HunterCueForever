@@ -8,7 +8,7 @@ WowUp 选择 **Forever** →「从 URL 安装」，使用本仓库地址：
 
 `https://github.com/ufolyx-niper/HunterCueForever`
 
-手动安装：在[最新 Release](https://github.com/ufolyx-niper/HunterCueForever/releases/latest)下载 `HunterCueForever-1.9.1-forever.zip`，将其中的 `HunterCueForever` 文件夹放到 `_forever_/Interface/AddOns/`。**更新后重启游戏**，确保新增文件加载。不要把自动生成的 Source code ZIP 当安装包。
+手动安装：在[最新 Release](https://github.com/ufolyx-niper/HunterCueForever/releases/latest)下载 `HunterCueForever-1.10.0-forever.zip`，将其中的 `HunterCueForever` 文件夹放到 `_forever_/Interface/AddOns/`。**更新后重启游戏**，确保新增文件加载。不要把自动生成的 Source code ZIP 当安装包。
 
 ## 纯图标 HUD
 
@@ -186,3 +186,8 @@ WowUp 选择 **Forever** →「从 URL 安装」，使用本仓库地址：
 
 射击按奥术、瞄准、狙击的顺序推荐。轮到瞄准时，即使正在移动或移动速度不可读，也会显示瞄准；请自行停步施放。彩色表示技能已选定且没有确认的计时阻碍。移动本身没有倒计时。
 灰色奥术优先显示实际等待时间；时间不可计算时尝试显示游戏自带的技能冷却转圈。图标右上角的小问号表示总等待秒数未确认，原生转圈可能只反映技能冷却。原生时间同样不可用时，只显示技能和角标。
+
+
+点出至少一级生存天赋「强化追踪」后，选中存活的敌对怪物，如果已经学会对应追踪且尚未开启，主图标旁会显示该追踪的图标。切换正确后消失。目标类型不可读、追踪未学或当前天赋没有投入点数时隐藏。适用于三系猎人。
+
+在 /hcf 设置页底部「强化追踪提醒」可关闭提醒、切换左右侧或调整大小（默认右侧、28 px）。位置跟随主图标，脱战定位预览中有示例图标。
