@@ -12,7 +12,8 @@ local function Ready(s,k,waiting)
         if not (k=="volley" and p.range==nil and s.ranged==true) then return false end
     end
     if ns.meleeSpell[k] and s.melee~=true then return false end
-    if ns.castTime[k] and s.moving~=false then return false end
+    local playerWillStop = s.spec=="mm" and k=="aimed"
+    if ns.castTime[k] and not playerWillStop and s.moving~=false then return false end
     if k=="raptor" and p.queued~=false then return false end
     return true
 end

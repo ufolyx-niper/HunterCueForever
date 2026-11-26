@@ -27,7 +27,8 @@ local function Render()
             icon:SetTexture(ns.SpellIcon(key));displayedKey=key;displayedID=id
         end
         icon:SetDesaturated(not preview and (lastOutput.wait==true or lastOutput.settling==true))
-        ns.DrawMainCooldown(cd,key,lastState,lastOutput,preview)
+        local timed=ns.DrawMainCooldown(cd,key,lastState,lastOutput,preview)
+        ns.unknownClock:SetShown(visible and not preview and lastOutput.wait==true and not timed)
         local font=cd.GetCountdownFontString and cd:GetCountdownFontString()
         if font and font.GetFont and font.SetFont and (font~=cd.hcfFontObject or cd.hcfFontSize~=ns.db.previewFontSize) then
             local path,_,flags=font:GetFont()
@@ -35,7 +36,7 @@ local function Render()
                 cd.hcfFontObject=font;cd.hcfFontSize=ns.db.previewFontSize
             end
         end
-    else cd:Clear();displayedKey=nil;displayedID=nil end
+    else ns.unknownClock:Hide();cd:Clear();displayedKey=nil;displayedID=nil end
     if preview and not wasPreview then root:Raise() end
     wasPreview=preview
     local ready=ns.BurstReady(lastState);ready.mark=ns.MarkReminderReady(lastState)
@@ -118,6 +119,18 @@ function ns.CreateUI()
     mainButton:RegisterForClicks("RightButtonUp");mainButton:SetScript("OnClick",OpenSettings)
     icon=mainButton:CreateTexture(nil,"ARTWORK");mainButton.icon=icon;icon:SetAllPoints(mainButton);icon:SetTexCoord(.08,.92,.08,.92)
     cd=CreateFrame("Cooldown",nil,mainButton,"CooldownFrameTemplate");cd:SetAllPoints(mainButton);ns.mainCooldown=cd
+    local overlay=CreateFrame("Frame",nil,mainButton)
+    overlay:SetAllPoints(mainButton)
+    overlay:SetFrameLevel(cd:GetFrameLevel()+1)
+    overlay:EnableMouse(false)
+    local badge=overlay:CreateTexture(nil,"OVERLAY")
+    badge:SetTexture(134400)
+    badge:SetVertexColor(1,.72,.25)
+    badge:SetSize(14,14)
+    badge:SetPoint("TOPRIGHT",mainButton,"TOPRIGHT",-1,-1)
+    badge:Hide()
+    ns.unknownClock=badge
+    cd:SetDrawSwipe(true)
     cd.noCooldownCount=true;cd:SetHideCountdownNumbers(true);cd:SetDrawEdge(false);cd:SetDrawBling(false)
     group=CreateFrame("Frame","HunterCueForeverBurstGroup",UIParent);ns.burstGroup=group
     group:SetMovable(true);group:SetUserPlaced(false);group:SetClampedToScreen(true);group:RegisterForDrag("LeftButton")
@@ -155,7 +168,7 @@ function ns.ShowError()
     if ns.preview then Render();return end
     lastOutput={}
     if root then
-        root:Hide();group:Hide();mainButton:Hide();cd:Clear()
+        root:Hide();group:Hide();mainButton:Hide();ns.unknownClock:Hide();cd:Clear()
         for key,b in pairs(buttons) do
             b:Hide();if ns.burstOption[key] then ns.SetGlow(b,false,b.visualSize or ns.db.burstSize) end
         end

@@ -26,6 +26,7 @@ end
 local function CorePreempts(s,item,out)
     if not item or out.key==item.key or not ns.ChoiceValid(s,out.key,false) then return false end
     return (s.spec=="bm" and item.key=="aimed" and (out.key=="hawk" or out.key=="arcane"))
+        or (s.spec=="mm" and item.key=="aimed" and out.key=="arcane")
         or (s.spec=="mm" and item.key=="sniper" and (out.key=="aimed" or out.key=="arcane"))
 end
 function ns.FutureState(s,delay)

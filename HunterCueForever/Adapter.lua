@@ -587,7 +587,15 @@ function ns.Snapshot()
     local _,regen=Pair(GetManaRegen);s.regen=Num(regen)
     s.pet=Call(UnitExists,"pet")==true and Call(UnitIsDeadOrGhost,"pet")==false
     local gcd=Cooldown(61304)
-    local gcdObject,_,gcdTime=Duration(61304,false)
+    local gcdObject,gcdZero,gcdTime=Duration(61304,false)
+    -- Supplement missing GCD flags only with consistent, readable native facts.
+    if gcd.active==nil and gcd.enabled~=false then
+        if gcdTime~=nil and (gcdZero==nil or gcdZero==(gcdTime==0)) then
+            gcd.active=gcdTime>0
+        elseif gcdTime==nil and gcdZero~=nil then
+            gcd.active=not gcdZero
+        end
+    end
     gcd.remaining=gcdTime or Remaining(gcd,now)
     s.gcd=gcd.active==true;s.gcdKnown=gcd.active~=nil;s.gcdStart=gcd.start;s.gcdRemaining=gcd.remaining;s.gcdDuration=gcdObject
     for key,id in pairs(ns.known) do
@@ -634,6 +642,7 @@ end
 function ns.DrawMainCooldown(frame,key,s,out,preview)
     local now=s.now or Now();local remaining=out.waitRemaining
     if preview then remaining=2 end
+    local numeric=false
     local shown=false
     if (out.wait or preview) and type(remaining)=="number" and remaining>0 then
         local timerKey=key..":"..tostring(ns.known[key] or 0)
@@ -643,6 +652,7 @@ function ns.DrawMainCooldown(frame,key,s,out,preview)
             frame.hcfTimerKey=timerKey;frame.hcfTimerEnd=ending;frame.hcfTimerStart=now
         end
         shown=pcall(frame.SetCooldown,frame,frame.hcfTimerStart,frame.hcfTimerEnd-frame.hcfTimerStart)
+        numeric=shown
     else
         frame.hcfTimerKey=nil;frame.hcfTimerEnd=nil;frame.hcfTimerStart=nil
         local p=s.spells and s.spells[key]
@@ -651,8 +661,15 @@ function ns.DrawMainCooldown(frame,key,s,out,preview)
             shown=pcall(frame.SetCooldownFromDurationObject,frame,object)
         end
     end
+    if not shown and out.wait and not preview and not out.castPreview and key=="arcane" then
+        local object=SpellAPI("GetSpellCooldownDuration",ns.known[key],false)
+        if object and frame.SetCooldownFromDurationObject then
+            shown=pcall(frame.SetCooldownFromDurationObject,frame,object)
+        end
+    end
     if not shown then frame:Clear() end
     frame:SetHideCountdownNumbers(not (ns.db.previewNumbers and shown and (out.wait or preview)))
+    return numeric
 end
 function ns.SavePosition(x,y)
     ns.db.x=x;ns.db.y=y

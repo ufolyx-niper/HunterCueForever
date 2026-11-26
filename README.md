@@ -8,7 +8,7 @@ WowUp 选择 **Forever** →「从 URL 安装」，使用本仓库地址：
 
 `https://github.com/ufolyx-niper/HunterCueForever`
 
-手动安装：在[最新 Release](https://github.com/ufolyx-niper/HunterCueForever/releases/latest)下载 `HunterCueForever-1.9.0-forever.zip`，将其中的 `HunterCueForever` 文件夹放到 `_forever_/Interface/AddOns/`。**更新后重启游戏**，确保新增文件加载。不要把自动生成的 Source code ZIP 当安装包。
+手动安装：在[最新 Release](https://github.com/ufolyx-niper/HunterCueForever/releases/latest)下载 `HunterCueForever-1.9.1-forever.zip`，将其中的 `HunterCueForever` 文件夹放到 `_forever_/Interface/AddOns/`。**更新后重启游戏**，确保新增文件加载。不要把自动生成的 Source code ZIP 当安装包。
 
 ## 纯图标 HUD
 
@@ -182,3 +182,7 @@ WowUp 选择 **Forever** →「从 URL 安装」，使用本仓库地址：
 合并发行版按 **GPL-2.0-only** 提供；原有独立模块的 MIT 声明保留，雄鹰时序参考 [WoWSims 雄鹰实现](https://github.com/wowsims/forever/blob/master/sim/hunter/summon_hawk.go)，常规穿插条件参考 [WoWSims normal weave](https://github.com/wowsims/forever/blob/master/ui/specs/hunter/dps/apls/normal_weave.apl.siml)。完整来源和许可见 [THIRD_PARTY.txt](HunterCueForever/THIRD_PARTY.txt)。技能事实参考 [WoWSims Forever](https://github.com/wowsims/forever/tree/00fecd9cff1be57483e21c061ed50d69748ae056)，接口合约参考 [Blizzard UI Forever 源码镜像](https://github.com/Gethe/wow-ui-source/tree/forever)。
 
 1.7.0 离线验证新增：6/6.4/6.6/7秒节奏、逐只消失、替换事件乱序、未知槽位、假死/真死、切目标、实际独立Lua环境重载、坏缓存、缺少新模块、BM/MM副天赋切换和部分扫描恢复。事件时间线不等于DPS模拟。孤狼校准比较使用既有装备样本、公开射击天赋预设与若干战斗条件，不宣称所有装备下的完美循环。当前公共站桩参考：[WoWSims Turret](https://github.com/wowsims/forever/blob/master/ui/specs/hunter/dps/apls/turret.apl.siml)。雄鹰槽位的实际客户端识别仍待玩家实测；未知字段不会被解密或读回UI数值。
+
+
+射击按奥术、瞄准、狙击的顺序推荐。轮到瞄准时，即使正在移动或移动速度不可读，也会显示瞄准；请自行停步施放。彩色表示技能已选定且没有确认的计时阻碍。移动本身没有倒计时。
+灰色奥术优先显示实际等待时间；时间不可计算时尝试显示游戏自带的技能冷却转圈。图标右上角的小问号表示总等待秒数未确认，原生转圈可能只反映技能冷却。原生时间同样不可用时，只显示技能和角标。
