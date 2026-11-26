@@ -807,12 +807,71 @@ function ns.HawkStatus()
     Say("雄鹰阶段："..(t.phase==nil and "未知，等待实际施放或消失确认" or t.phase==2 and "下一发奥术" or "下一发雄鹰").." / "..t.reason)
     for i,h in ipairs(t.records) do Say("鹰 "..i.."："..h.source.." / "..string.format("%.1f",math.max(0,h.expires-Now())).." 秒 / 槽 "..(h.slot or "未知")) end
 end
+-- Native combat log is shared with DBM and /combatlog. Never claim an
+-- already running stream. Only a confirmed successful start grants ownership.
+local studyStart,studyEnd=1795669200,1795986000
+local studyOwned,studyElapsed=false,0
+local studyState="未启用"
+local function StudyClock()
+    return Num(Call(GetServerTime))
+end
+function ns.StudyStatus()
+    local t=StudyClock()
+    if not studyOwned and t and t>=studyEnd then return "采样期已结束" end
+    return studyState
+end
+local function ReleaseStudy(reason)
+    if studyOwned then
+        if Call(LoggingCombat,false)~=false then
+            studyState="停止尚未确认（接口可能限流）"
+            return
+        end
+        studyOwned=false
+    end
+    studyState=reason
+end
+local function UpdateStudy()
+    if not ns.db.studyLogging then ReleaseStudy("未启用");return end
+    local t=StudyClock()
+    if not t then ReleaseStudy("服务器时间不可读，暂停采样");return end
+    if t>=studyEnd then
+        ns.db.studyLogging=false
+        ReleaseStudy("采样期已结束")
+        return
+    end
+    if t<studyStart then ReleaseStudy("采样期尚未开始");return end
+    if type(LoggingCombat)~="function" then studyState="当前客户端无战斗日志接口";return end
+    local active=Call(LoggingCombat) -- zero arguments: an explicit nil may disable logging
+    if active==true then
+        studyState=studyOwned and "记录中" or "沿用已开启的战斗日志"
+    elseif active==false then
+        studyOwned=Call(LoggingCombat,true)==true
+        studyState=studyOwned and "记录中" or "开启尚未确认，将重试"
+    else
+        studyState="日志状态暂不可读，将重试"
+    end
+end
+function ns.SyncStudy()
+    studyElapsed=0
+    UpdateStudy()
+    if ns.RefreshStudyControls then ns.RefreshStudyControls() end
+end
+local function TickStudy(elapsed)
+    if not ns.db.studyLogging and not studyOwned then return end
+    studyElapsed=studyElapsed+elapsed
+    -- Querying LoggingCombat is itself rate-limited, shared across addons.
+    if studyElapsed>=12 then ns.SyncStudy() end
+end
 function ns.Command(message)
     if not ns.db then Say("需要 Forever 客户端上的猎人角色。");return end
     local cmd,arg=message:lower():match("^%s*(%S*)%s*(.-)%s*$")
     if cmd=="" or cmd=="config" or cmd=="options" then
         if ns.LayoutLockedByCombat() then Say("请脱战后打开设置。");return end
         if ns.OpenOptions then ns.OpenOptions() end;return
+    elseif cmd=="sample" then
+        if arg=="on" or arg=="off" then ns.SetOption("studyLogging",arg=="on") end
+        Say("毒蛇日志采样："..ns.StudyStatus().."。/hcf sample on 或 off")
+        return
     elseif cmd=="spec" and ns.specNames[arg] then ns.db.spec=arg;ns.ResetTracking()
     elseif cmd=="mode" and arg=="next" then
         ns.db.mode=({balanced="conserve",conserve="burst",burst="balanced"})[ns.db.mode]
@@ -842,6 +901,7 @@ function ns.Command(message)
         local s=ns.Snapshot();local count=0;for _ in pairs(ns.known) do count=count+1 end
         Say(ns.version.." / "..s.spec.." / "..s.mode.." / 已学技能组 "..count)
         Say(ns.TargetStatusText())
+        Say("毒蛇日志采样："..ns.StudyStatus())
         Say("毒蛇补放提醒："..(s.stingQuietReason or "按原有目标条件判断"))
         Say("强化追踪："..(not ns.db.trackingReminder and "提醒已关闭" or not s.target and "没有有效目标"
             or s.nativeTrackingIcons and "目标类型受限，已交给原生控件显示"
@@ -899,6 +959,7 @@ local function Event(_,event,...)
         interface=ns.Clean(interface)
         if not ok or class~="HUNTER" or type(interface)~="number" or interface<16000 or interface>=20000 then return end
         ns.db=ns.Settings(HunterCueForeverDB);HunterCueForeverDB=ns.db
+        ns.SyncStudy()
         ns.ResetHawks(nil)
         if ns.HawkTracker then ns.hawkState=ns.HawkTracker.Restore(HunterCueHawkState,Now(),Num(Call(GetServerTime))) or ns.hawkState end
         ns.hawks=ns.hawkState and ns.hawkState.records or {};ns.ScanSpells();ns.ReadHawkSlots(nil,true)
@@ -933,7 +994,10 @@ local function Event(_,event,...)
     elseif event=="UNIT_SPELLCAST_SUCCEEDED" then ns.Succeeded(...)
     elseif event=="SPELL_UPDATE_COOLDOWN" then ns.CooldownEvent()
     elseif event=="PLAYER_TARGET_CHANGED" then ns.TargetChanged()
-    elseif event=="PLAYER_LOGOUT" then ns.SaveHawks()
+    elseif event=="PLAYER_LOGOUT" then
+        ReleaseStudy("已离开角色")
+        if studyOwned then Say("退出时未能确认战斗日志已停止，请下次登录检查。") end
+        ns.SaveHawks()
     elseif event=="PLAYER_TOTEM_UPDATE" then local slot=...;ns.ReadHawkSlots(slot,true)
     elseif event=="PLAYER_DEAD" then ns.ResetTracking(true);ns.SaveHawks()
     elseif event=="PLAYER_ENTERING_WORLD" then
@@ -952,6 +1016,7 @@ end)
 local elapsedTotal=0
 events:SetScript("OnUpdate",function(_,elapsed)
     if not ns.db then return end
+    TickStudy(elapsed)
     elapsedTotal=elapsedTotal+elapsed;if elapsedTotal<0.1 then return end;elapsedTotal=0
     local ok=pcall(function()
         local locked=ns.LayoutLockedByCombat()

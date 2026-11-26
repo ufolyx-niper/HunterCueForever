@@ -1,6 +1,6 @@
 -- SPDX-License-Identifier: MIT
 local _, ns = ...
-ns.version = "1.11.0"
+ns.version = "1.11.1"
 -- Rank order is explicit. Spell IDs are facts checked against WoWSims Forever
 -- 00fecd9c spell_data_auto_gen.go; never sort by ID or localized rank text.
 ns.spells = {
@@ -29,7 +29,7 @@ ns.family = {hawk={"hawk","arcane"}, arcane={"hawk","arcane"},
     aimed={"aimed","multi"}, multi={"aimed","multi"},
     immolation={"immolation","explosive"}, explosive={"immolation","explosive"}}
 ns.defaults = {spec="auto", mode="balanced", targets=0, cooldowns=true,
-    trackingReminder=true,trackingSize=28,trackingSide="right",previewNumbers=true,previewFontSize=22,
+    studyLogging=false,trackingReminder=true,trackingSize=28,trackingSide="right",previewNumbers=true,previewFontSize=22,
     mmSniper=true,traps=false, weave="normal", enabled=true, locked=false, x=36, y=-80,
     mainSize=56,burstSize=32,burstSpacing=8,rowGap=12,iconLayoutVersion=1,
     burstX=-24,burstY=-136,burstDirection="right",groupLayoutVersion=0,burstGlow=true,stingGlow=true,

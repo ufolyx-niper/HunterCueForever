@@ -27,6 +27,7 @@ function ns.SetOption(key,value)
         ns.db.burstX,ns.db.burstY=ns.GroupOrigin(ns.db,ns.known);ns.db.groupLayoutVersion=1
     end
     ns.db[key]=value;ns.resetArmed=false
+    if key=="studyLogging" then ns.SyncStudy() end
     if key=="targets" then ns.ResetTargets() end
     if key=="spec" or key=="weave" then ns.ResetTracking() end
     Refresh();return true
@@ -46,7 +47,7 @@ function ns.ArrangeSmallIcons()
 end
 function ns.ResetAll()
     if not ns.resetArmed or ns.LayoutLockedByCombat() then return false end
-    ns.db=ns.Settings({});HunterCueForeverDB=ns.db;ns.resetArmed=false;ns.EndPreview();ns.ResetTracking();ns.ResetTargets();Refresh();return true
+    ns.db=ns.Settings({});HunterCueForeverDB=ns.db;ns.SyncStudy();ns.resetArmed=false;ns.EndPreview();ns.ResetTracking();ns.ResetTargets();Refresh();return true
 end
 local function Text(parent,text,x,y,width,size,height)
     local f=parent:CreateFontString(nil,"OVERLAY","GameFontNormal")
@@ -89,7 +90,7 @@ local function BuildCanvas(parent)
     local panel=CreateFrame("Frame",nil,parent);panel:Hide()
     local scroll=CreateFrame("ScrollFrame",nil,panel,"UIPanelScrollFrameTemplate")
     scroll:SetPoint("TOPLEFT",0,0);scroll:SetPoint("BOTTOMRIGHT",-28,0)
-    local content=CreateFrame("Frame",nil,scroll);content:SetSize(560,3010);scroll:SetScrollChild(content)
+    local content=CreateFrame("Frame",nil,scroll);content:SetSize(560,3220);scroll:SetScrollChild(content)
     local v={panel=panel,controls={},layoutControls={},numericControls={},refreshing=false};ns.optionViews[#ns.optionViews+1]=v
     local c=v.controls
     Text(content,"HunterCue Forever · 设置",16,12,520,20,28)
@@ -235,9 +236,15 @@ local function BuildCanvas(parent)
     v.layoutControls[#v.layoutControls+1]=c.trackingSide
     Slider("trackingSize","追踪图标大小 · 16–64 px",2870,16,64,1)
     Text(content,"图标跟随主图标移动。追踪正确时隐藏，战斗中类型受限时尝试原生显示。",16,2948,520,11,44)
+    Text(content,"限期战斗日志采样",16,3020,520,16)
+    Check("studyLogging","登录此猎人时自动记录，至多伦多时间 11 月 29 日 16:00",3056)
+    Text(content,"游戏会将野外和副本的完整战斗事件写入本机 Logs。\n用 /hcf sample off 提前结束。已由其他插件开启的日志由原插件管理。",16,3094,520,11,55)
+    c.studyStatus=Text(content,"",16,3154,520,11,32)
     v.status=Text(content,"",16,2190,520,12,42)
     function v.Refresh()
         v.refreshing=true
+        c.studyLogging:SetChecked(ns.db.studyLogging)
+        c.studyStatus:SetText(ns.StudyStatus())
         for _,k in ipairs({"enabled","locked","cooldowns","traps","markInCombat","stableRecommendations","burstRacial","burstRapid","burstWrath","stingEnabled","stingIdle","stingOpening","stingSkipElementals","burstGlow","stingGlow","mmSniper","previewNumbers","trackingReminder"}) do c[k]:SetChecked(ns.db[k]) end
         for k in pairs(enums) do c[k]:SetText(labels[ns.db[k]]) end
         for _,k in ipairs({"mainSize","burstSize","burstSpacing","stingSize","previewFontSize","trackingSize"}) do c[k]:SetValue(ns.db[k]);c[k.."Label"]:SetText(ns.db[k].." px") end
@@ -277,6 +284,14 @@ local function BuildCanvas(parent)
     panel:SetScript("OnShow",function() ns.resetArmed=false;v.Refresh() end)
     panel:SetScript("OnHide",function() ns.resetArmed=false end)
     v.Refresh();return v
+end
+function ns.RefreshStudyControls()
+    for _,view in ipairs(ns.optionViews) do
+        if view.controls.studyStatus then
+            view.controls.studyLogging:SetChecked(ns.db.studyLogging)
+            view.controls.studyStatus:SetText(ns.StudyStatus())
+        end
+    end
 end
 function ns.RefreshOptions() for _,v in ipairs(ns.optionViews) do v.Refresh() end end
 local fallback
