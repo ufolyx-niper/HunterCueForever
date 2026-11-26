@@ -73,6 +73,7 @@ function ns.SaveHawks()
     if ns.hawkState then HunterCueHawkState=ns.HawkTracker.Export(ns.hawkState,Now(),Num(Call(GetServerTime))) end
 end
 function ns.ResetTracking(full)
+    ns.ResetStingRetry()
     ns.usableHistory={}
     ns.cooldownCache={};ns.fences={};ns.pending={};ns.inferred={};ns.attempts={}
     if full then ns.ResetHawks(0);ns.seenSuccess={} end
@@ -349,6 +350,7 @@ local function TargetIdentity()
     return {guid=guid,name=name,full=type(realm)=="string" and realm~="" and name.."-"..realm or name}
 end
 function ns.TargetChanged()
+    ns.ResetStingRetry()
     ns.usableHistory={}
     ns.generation=ns.generation+1;ns.inferred={};ns.pending={};ns.attempts={};ns.meleeSince=nil;ns.lastAuto=nil
     if ns.ClearRecommendation then ns.ClearRecommendation() end
@@ -361,11 +363,14 @@ function ns.Sent(unit,targetName,guid,id)
     local target=TargetIdentity()
     if not target or not targetName then return end
     if targetName~=target.name and targetName~=target.full then return end
+    local retrySafe=true
     for _,token in ipairs({"mouseover","focus"}) do
         local otherName=Call(UnitName,token);local otherGUID=Call(UnitGUID,token)
         if otherName==target.name and otherGUID and otherGUID~=target.guid then return end
+        if key=="sting" and Call(UnitExists,token)~=false and otherGUID~=target.guid
+            and (not otherName or otherName==target.name) then retrySafe=false end
     end
-    ns.pending[guid]={key=key,target=target.guid,generation=ns.generation,at=Now()}
+    ns.pending[guid]={key=key,retrySafe=retrySafe,target=target.guid,generation=ns.generation,at=Now()}
     local n=0;for k,v in pairs(ns.pending) do
         n=n+1;if Now()-v.at>10 or n>16 then ns.pending[k]=nil end
     end
@@ -398,13 +403,18 @@ function ns.Succeeded(unit,guid,id)
     local target=TargetIdentity()
     if target and target.guid==sent.target then
         ns.inferred[key]={expires=now+(key=="sting" and 15 or 120),target=target.guid,generation=ns.generation}
+        if key=="sting" then
+            if sent.retrySafe and ns.db.stingEnabled and not ns.stingConflict then ns.StingCastObserved(now) end
+            return
+        end
         local previous=ns.attempts[key]
         ns.attempts[key]={at=now,failures=previous and previous.failures or 0,
             pauseUntil=previous and previous.pauseUntil or 0,checked=false}
     end
 end
-local function AuraState(key,now)
+local function AuraState(key,now,observe)
     local active,remaining=Aura(key)
+    if key=="sting" and observe then ns.ObserveStingResult(now,active) end
     local attempt=ns.attempts[key]
     if active==true then ns.attempts[key]=nil;return true,false,false,remaining end
     if active==false and attempt then
@@ -651,7 +661,7 @@ function ns.TrackingIcon(s)
 end
 local trackingTalentEvents={PLAYER_ENTERING_WORLD=true,PLAYER_TALENT_UPDATE=true,ACTIVE_TALENT_GROUP_CHANGED=true,
     CHARACTER_POINTS_CHANGED=true,SPELLS_CHANGED=true,TRAIT_CONFIG_UPDATED=true,TRAIT_CONFIG_LIST_UPDATED=true}
-function ns.Snapshot()
+function ns.Snapshot(observeSting)
     local now=Now();local db=ns.db
     ns.ResolvePendingScan()
     ns.ReadHawkSlots()
@@ -729,9 +739,10 @@ function ns.Snapshot()
     else ns.meleeSince=nil end
     s.sinceAuto=ns.lastAuto and now-ns.lastAuto
     s.mark,s.markEstimated,s.markBackoff=AuraState("mark",now)
-    s.sting,s.stingEstimated,s.stingBackoff,s.stingRemaining=AuraState("sting",now)
+    local stingActive,stingEstimated,unused,stingRemaining=AuraState("sting",now,observeSting)
+    s.sting,s.stingEstimated,s.stingRemaining=stingActive,stingEstimated,stingRemaining
     s.markPending=ns.attempts.mark~=nil and now-ns.attempts.mark.at<2
-    s.stingPending=ns.attempts.sting~=nil and now-ns.attempts.sting.at<2
+    s.stingQuietReason=ns.StingQuietReason(now)
     return s
 end
 function ns.SpellName(key)
@@ -831,6 +842,7 @@ function ns.Command(message)
         local s=ns.Snapshot();local count=0;for _ in pairs(ns.known) do count=count+1 end
         Say(ns.version.." / "..s.spec.." / "..s.mode.." / 已学技能组 "..count)
         Say(ns.TargetStatusText())
+        Say("毒蛇补放提醒："..(s.stingQuietReason or "按原有目标条件判断"))
         Say("强化追踪："..(not ns.db.trackingReminder and "提醒已关闭" or not s.target and "没有有效目标"
             or s.nativeTrackingIcons and "目标类型受限，已交给原生控件显示"
             or s.trackingIcon and ("请开启 "..(SpellAPI("GetSpellName",trackingCache.spell) or "对应追踪"))
@@ -947,7 +959,7 @@ events:SetScript("OnUpdate",function(_,elapsed)
             ns.layoutRefreshPending=nil;ns.lastLayoutLock=locked;if ns.RefreshOptions then ns.RefreshOptions() end
         end
         if ns.nextScan and Now()>=ns.nextScan and not locked then ns.ScanSpells() end
-        local s=ns.Snapshot();ns.UpdateUI(s,ns.Recommend(s,ns.Decide(s)))
+        local s=ns.Snapshot(true);ns.UpdateUI(s,ns.Recommend(s,ns.Decide(s)))
     end)
     if not ok then ns.ClearRecommendation();ns.lastError=true;if ns.ShowError then ns.ShowError() end end
 end)

@@ -8,7 +8,7 @@ WowUp 选择 **Forever** →「从 URL 安装」，使用本仓库地址：
 
 `https://github.com/ufolyx-niper/HunterCueForever`
 
-手动安装：在[最新 Release](https://github.com/ufolyx-niper/HunterCueForever/releases/latest)下载 `HunterCueForever-1.10.2-forever.zip`，将其中的 `HunterCueForever` 文件夹放到 `_forever_/Interface/AddOns/`。**更新后重启游戏**，确保新增文件加载。不要把自动生成的 Source code ZIP 当安装包。
+手动安装：在[最新 Release](https://github.com/ufolyx-niper/HunterCueForever/releases/latest)下载 `HunterCueForever-1.11.0-forever.zip`，将其中的 `HunterCueForever` 文件夹放到 `_forever_/Interface/AddOns/`。**更新后重启游戏**，确保新增文件加载。不要把自动生成的 Source code ZIP 当安装包。
 
 ## 纯图标 HUD
 
@@ -193,3 +193,8 @@ WowUp 选择 **Forever** →「从 URL 安装」，使用本仓库地址：
 强化追踪在主图标外侧，默认右边。打开 /hcf → 底部「强化追踪提醒」可看示例、改左右或调整大小。只有已点天赋、当前怪对应的追踪已学且未开启时出现；追踪正确时隐藏。目标类型受限时尝试原生显示。
 
 战斗中目标类型受限时，由游戏原生控件在主图标旁显示对应追踪。例如当前开启人形追踪、选中野兽时，若已点强化追踪且已学追踪野兽，就显示野兽追踪图标。切换正确后该位置留空。原生显示不可用或天赋、追踪菜单状态无法确认时隐藏。
+
+
+毒蛇钉刺现在会自动暂缓重复催补。确认你对当前目标放出钉刺后，高亮和闪光先暂停 2 秒。在同一目标上，两次短时间内的施放都在生效窗口内明确观察到没有钉刺，会暂停 20 秒。如果减益读不到，但能确认你在 8 秒内对同一目标连续施放两次，最多等到第二发后的第 8 秒再提醒。失去目标关联时继续使用原来的提醒。换目标或确认已经挂上钉刺会清除暂停；真正的钉刺计时独立显示。
+
+这些是当前目标的临时重试规则。不会把一次抵抗、队友打出的免疫或一次没挂上写进永久 NPC 名单。尚无本版可核实的毒蛇专属免疫名单。/hcf status 可查看暂缓原因。主循环的毒蛇预留蓝量仍按既有规则计算。

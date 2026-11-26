@@ -9,6 +9,8 @@ Changed 2026-11-22 by ufolyx-niper: unified HunterCue settings, isolated module
 lifecycle, native cooldown sweep instead of text, plain icons instead of borders,
 shared persistent editing controls, independent coordinates and duplicate guard.
 
+Changed 2026-11-26: integrated target-scoped retry pacing for missing-Sting reminders.
+
 Native aura clipping derives from EverAuras (GPL version 2), Hackblarvest:
 https://github.com/Hackblarvest/EverAuras/tree/014c64f6116362f7a9e1da9e450367f42616a937
 ForeverEngineAura.lua. GPL text is supplied in LICENSE.

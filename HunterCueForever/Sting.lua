@@ -1,9 +1,61 @@
 -- SPDX-License-Identifier: GPL-2.0-only
+-- Modified 2026-11-26: target-scoped retry policy for the missing-Sting highlight.
 -- Modified 2026-11-22 by ufolyx-niper: HunterCue integration and pure-icon monitoring.
 -- Modified 2026-11-23: conditional native glow, padded mask and transition-only opening visibility.
 -- Aura clipping after EverAuras, and health-curve projection after Last Breath Forever.
 -- Adapted from SerpentStingHint 0.1.4. See THIRD_PARTY.txt and the accompanying licenses.
 local addon, ns = ...
+-- Retry pacing is per target selection, never a persistent immunity judgment.
+-- Only a positively attributed player cast or a real aura observation feeds it.
+local retry
+local FLIGHT, RESULT_WINDOW, FAILURE_WINDOW = 2, 4, 10
+local BACKOFF, RAPID_RETRY = 20, 8
+
+function ns.ResetStingRetry()
+    retry=nil
+end
+
+function ns.StingCastObserved(now)
+    if retry and now>=retry.castAt and retry.pauseUntil and now<retry.pauseUntil then return end
+    local previous=retry
+    retry={castAt=now}
+    if previous and not previous.pauseUntil and now>=previous.castAt then
+        retry.rapid=now-previous.castAt<=RAPID_RETRY
+        if previous.absentAt and now-previous.absentAt<=FAILURE_WINDOW then
+            retry.previousAbsence=previous.absentAt
+        end
+    end
+end
+
+function ns.ObserveStingResult(now,active)
+    if not retry then return end
+    local age=now-retry.castAt
+    if active==true or age<0 then retry=nil;return end
+    if retry.pauseUntil then
+        if now>=retry.pauseUntil then retry=nil end
+        return
+    end
+    if age>RESULT_WINDOW then
+        if age>FAILURE_WINDOW then retry=nil end
+        return
+    end
+    if age<FLIGHT or retry.absentAt then return end
+    if active==false then
+        retry.absentAt=now
+        if retry.previousAbsence and now-retry.previousAbsence<=FAILURE_WINDOW then
+            retry.reason="重试后仍未观察到钉刺";retry.pauseUntil=now+BACKOFF
+        end
+    elseif retry.rapid then
+        retry.reason="连续施放，效果暂不可读";retry.pauseUntil=retry.castAt+RAPID_RETRY
+    end
+end
+
+function ns.StingQuietReason(now)
+    if not retry or now<retry.castAt then return nil end
+    if retry.pauseUntil and now<retry.pauseUntil then return retry.reason end
+    if now-retry.castAt<FLIGHT then return "等待钉刺生效" end
+end
+
 -- Called only after the host validates hunter/Forever and loads its settings.
 function ns.InitSting()
 if ns.stingAnchor then return end
@@ -70,7 +122,7 @@ local function RefreshReminders()
             targetCreatureType = creatureType
         end
     end
-    missingClip:SetShown(not (ns.db.stingSkipElementals and targetCreatureType == ELEMENTAL_TYPE))
+    missingClip:SetShown(not ns.StingQuietReason(GetTime()) and not (ns.db.stingSkipElementals and targetCreatureType == ELEMENTAL_TYPE))
 end
 
 local preview = CreateFrame("Frame", nil, UIParent)
@@ -420,6 +472,7 @@ local function Event(_, event, unit, action)
     end
     if event ~= "UNIT_COMBAT" then
         if event == "PLAYER_TARGET_CHANGED" or event == "PLAYER_ENTERING_WORLD" then
+            ns.ResetStingRetry()
             openingEndsAt, targetMaxHealth = nil, nil
         elseif event == "PLAYER_REGEN_ENABLED" then
             local fighting = UnitAffectingCombat("target")
