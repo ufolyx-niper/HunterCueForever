@@ -42,3 +42,5 @@ Rotation reference only, no simulation source redistributed:
 https://github.com/wowsims/forever/blob/master/ui/specs/hunter/dps/apls/turret.apl.siml
 https://github.com/wowsims/forever/blob/master/ui/specs/hunter/dps/apls/turret_hawk.apl.siml
 https://github.com/Gethe/wow-ui-source/blob/forever/Interface/AddOns/Blizzard_APIDocumentationGenerated/TotemDocumentation.lua
+
+Behavioral reference: EllesmereUI Aura Buff Reminders (Forever hunter tracking). Independent native-widget implementation; no source or assets imported.

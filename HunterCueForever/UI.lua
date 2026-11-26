@@ -8,8 +8,66 @@ local lastState,lastOutput={},{}
 local displayedKey,displayedID,wasPreview
 local renderFault=false
 local trackingIcon
+local trackingView,trackingBar,trackingFill
+local trackingCells={}
+local paintedIcons,trackingWidth
+local function PrepareTrackingDisplay()
+    trackingView=CreateFrame("Frame",nil,root)
+    trackingView:Hide()
+    trackingView:EnableMouse(false)
+    trackingView:SetClipsChildren(true)
+    trackingView:SetAllPoints(trackingIcon)
+    trackingBar=CreateFrame("StatusBar",nil,trackingView)
+    trackingBar:EnableMouse(false)
+    trackingBar:SetStatusBarTexture("Interface\\Buttons\\WHITE8X8")
+    trackingBar:SetReverseFill(true)
+    trackingBar:SetMinMaxValues(0,16)
+    trackingBar:SetAlpha(0)
+    trackingFill=trackingBar:GetStatusBarTexture()
+    assert(trackingFill)
+    -- Cells belong to the viewport, independent of the invisible bar's alpha.
+    for kind=1,7 do
+        local cell=trackingView:CreateTexture(nil,"ARTWORK")
+        cell:SetTexCoord(.08,.92,.08,.92)
+        cell:Hide()
+        trackingCells[kind]=cell
+    end
+end
+local function SizeTrackingDisplay(size)
+    -- Four units of blank space between adjacent images absorb pixel rounding.
+    local pitch=size+4
+    trackingBar:SetSize(16*pitch,size)
+    trackingBar:SetPoint("TOPRIGHT",trackingView,"TOPRIGHT",4,0)
+    for kind,cell in ipairs(trackingCells) do
+        cell:SetSize(size,size)
+        cell:SetPoint("TOPLEFT",trackingFill,"TOPLEFT",(kind-1)*pitch,0)
+    end
+    trackingWidth=size
+end
+local function SetNativeValue(value)
+    if trackingWidth~=ns.db.trackingSize then SizeTrackingDisplay(ns.db.trackingSize) end
+    trackingBar:SetValue(value)
+end
+function ns.SetTrackingDisplayValue(value)
+    if not trackingFill then return false end
+    return pcall(SetNativeValue,value)
+end
+local function PaintTrackingCells(icons)
+    if not trackingFill then return end
+    if not icons then trackingView:Hide();return end
+    if paintedIcons~=icons then
+        for kind,cell in ipairs(trackingCells) do
+            local texture=icons[kind]
+            if texture then cell:SetTexture(texture) end
+            cell:SetShown(texture~=nil)
+        end
+        paintedIcons=icons
+    end
+    trackingView:Show()
+end
 function ns.HideTracking()
-    lastState.trackingIcon=nil
+    lastState.trackingIcon=nil;lastState.nativeTrackingIcons=nil
+    if trackingView then trackingView:Hide() end
     if trackingIcon then trackingIcon:Hide() end
 end
 local function Render()
@@ -51,6 +109,7 @@ local function Render()
             end
         end
     else ns.waitDigits:Hide();cd:Clear();displayedKey=nil;displayedID=nil end
+    PaintTrackingCells(visible and not preview and ns.db.trackingReminder and lastState.nativeTrackingIcons)
     local texture=preview and 132328 or lastState.trackingIcon
     if visible and ns.db.trackingReminder and texture then
         trackingIcon:SetTexture(texture);trackingIcon:Show()
@@ -144,6 +203,9 @@ function ns.CreateUI()
     mainButton=CreateFrame("Button",nil,root);ns.mainButton=mainButton
     mainButton:RegisterForClicks("RightButtonUp");mainButton:SetScript("OnClick",OpenSettings)
     trackingIcon=root:CreateTexture(nil,"ARTWORK");ns.trackingIcon=trackingIcon;trackingIcon:Hide()
+    local nativeReady=pcall(PrepareTrackingDisplay)
+    if not nativeReady then trackingFill=nil end
+    ns.trackingViewport=trackingView
     icon=mainButton:CreateTexture(nil,"ARTWORK");mainButton.icon=icon;icon:SetAllPoints(mainButton);icon:SetTexCoord(.08,.92,.08,.92)
     cd=CreateFrame("Cooldown",nil,mainButton,"CooldownFrameTemplate");cd:SetAllPoints(mainButton);ns.mainCooldown=cd
     local overlay=CreateFrame("Frame",nil,mainButton)

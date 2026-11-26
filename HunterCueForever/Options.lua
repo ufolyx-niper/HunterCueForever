@@ -234,7 +234,7 @@ local function BuildCanvas(parent)
     Choice("trackingSide","追踪图标位置",2834)
     v.layoutControls[#v.layoutControls+1]=c.trackingSide
     Slider("trackingSize","追踪图标大小 · 16–64 px",2870,16,64,1)
-    Text(content,"图标跟随主图标移动。追踪已开启、目标类型未知或未点天赋时隐藏。",16,2948,520,11,44)
+    Text(content,"图标跟随主图标移动。追踪正确时隐藏，战斗中类型受限时尝试原生显示。",16,2948,520,11,44)
     v.status=Text(content,"",16,2190,520,12,42)
     function v.Refresh()
         v.refreshing=true

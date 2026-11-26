@@ -588,50 +588,66 @@ local function ImprovedTracking()
     return Field(node,"ID")==104996 and Field(Field(node,"activeEntry"),"entryID")==129660
         and rank~=nil and rank>=1 and rank<=5 and rank==math.floor(rank)
 end
-local function MissingTracking(spell)
+local creatureBySpell={}
+for kind,spell in ipairs(trackingSpells) do creatureBySpell[spell]=kind end
+
+-- Only public menu data enters this table. An active/ambiguous category has
+-- no image. Missing spellID on a normal non-spell filter is valid.
+local function InactiveTrackingIcons()
     local map=C_Minimap
     local count=Num(Call(map and map.GetNumTrackingTypes))
     if not count or count<1 or count>128 or count~=math.floor(count) then return nil end
-    local icon
+    local icons,seen={},{}
     for i=1,count do
         local row=Call(map.GetTrackingInfo,i)
         if type(row)~="table" then return nil end
         local id,ok=Field(row,"spellID")
         if not ok then return nil end
-        if id==spell then
-            -- A matching entry in the player's own tracking menu establishes
-            -- availability. A duplicate, unreadable flag or active entry cancels it.
-            if icon or Field(row,"active")~=false then return nil end
-            icon=Num(Field(row,"texture"))
-            if not icon or icon<=0 then return nil end
+        local kind=creatureBySpell[id]
+        if kind then
+            local texture=Num(Field(row,"texture"))
+            if not seen[kind] and Field(row,"active")==false and texture and texture>0 then
+                icons[kind]=texture
+            else
+                icons[kind]=nil
+            end
+            seen[kind]=true
         end
     end
-    return icon
+    return icons
 end
 function ns.InvalidateTracking(talent)
-    trackingCache.nextScan=nil;trackingCache.icon=nil
+    trackingCache.nextScan=nil;trackingCache.icons=nil
     if talent then trackingCache.nextTalent=nil end
     if ns.HideTracking then ns.HideTracking() end
 end
 function ns.TrackingIcon(s)
-    if not ns.db.trackingReminder or not s.target or s.scanBlocked then
-        trackingCache.nextScan=nil
-        return nil
-    end
-    local _,kind=Pair(UnitCreatureType,"target")
-    local spell=trackingSpells[kind]
-    if not spell then trackingCache.nextScan=nil;return nil end
+    trackingCache.spell=nil
+    if not ns.db.trackingReminder or not s.target or s.scanBlocked then return nil end
     local now=s.now
     if not trackingCache.nextTalent or now>=trackingCache.nextTalent then
         trackingCache.talented=ImprovedTracking()
         trackingCache.nextTalent=now+2
     end
-    if not trackingCache.talented then trackingCache.nextScan=nil;return nil end
-    if trackingCache.spell~=spell or not trackingCache.nextScan or now>=trackingCache.nextScan then
-        trackingCache.icon=MissingTracking(spell)
-        trackingCache.spell=spell;trackingCache.nextScan=now+.25
+    if not trackingCache.talented then return nil end
+    if not trackingCache.nextScan or now>=trackingCache.nextScan then
+        trackingCache.icons=InactiveTrackingIcons()
+        trackingCache.nextScan=now+.25
     end
-    return trackingCache.icon
+    local icons=trackingCache.icons
+    if not icons or not next(icons) then return nil end
+    local ok,_,kind=pcall(UnitCreatureType,"target")
+    if not ok then return nil end
+    if issecretvalue and issecretvalue(kind) then
+        -- Display sink only: do not store or inspect this value or the
+        -- resulting layout. The snapshot contains only public menu images.
+        if ns.SetTrackingDisplayValue and ns.SetTrackingDisplayValue(kind) then
+            s.nativeTrackingIcons=icons
+        end
+        return nil
+    end
+    trackingCache.spell=trackingSpells[kind]
+    return icons[kind]
 end
 local trackingTalentEvents={PLAYER_ENTERING_WORLD=true,PLAYER_TALENT_UPDATE=true,ACTIVE_TALENT_GROUP_CHANGED=true,
     CHARACTER_POINTS_CHANGED=true,SPELLS_CHANGED=true,TRAIT_CONFIG_UPDATED=true,TRAIT_CONFIG_LIST_UPDATED=true}
@@ -816,6 +832,7 @@ function ns.Command(message)
         Say(ns.version.." / "..s.spec.." / "..s.mode.." / 已学技能组 "..count)
         Say(ns.TargetStatusText())
         Say("强化追踪："..(not ns.db.trackingReminder and "提醒已关闭" or not s.target and "没有有效目标"
+            or s.nativeTrackingIcons and "目标类型受限，已交给原生控件显示"
             or s.trackingIcon and ("请开启 "..(SpellAPI("GetSpellName",trackingCache.spell) or "对应追踪"))
             or not trackingCache.talented and "天赋未确认" or "当前无需提醒或追踪信息不可读")
             .." / 位于主图标"..(ns.db.trackingSide=="left" and "左侧" or "右侧").."（屏幕边缘可换侧）")
