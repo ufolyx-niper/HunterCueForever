@@ -206,6 +206,22 @@ function ns.CooldownEvent()
         ns.cooldownCache[key]={id=id,stamp=now,gcd=Field(info,"isOnGCD")}
     end
 end
+-- Bounded fallback only after an observed player cast. Static cooldowns may
+-- differ from talented cooldowns; estimates never establish readiness.
+local estimatedEnds={}
+local estimatedGCD
+local timedShots={arcane=true,aimed=true,multi=true,sniper=true,hawk=true}
+local function RecordShotTimer(key,id,now)
+    if not timedShots[key] then return end
+    local base,gcd=Pair(GetSpellBaseCooldown,id)
+    base=Num(base);gcd=Num(gcd)
+    if base and base>0 and base<=60000 then
+        for _,member in ipairs(ns.family[key] or {key}) do
+            estimatedEnds[member]={ends=now+base/1000,id=ns.known[member]}
+        end
+    end
+    if gcd and gcd>0 and gcd<=2000 and not ns.castTime[key] then estimatedGCD=now+gcd/1000 end
+end
 local function Duration(id,ignoreGCD)
     local object=SpellAPI("GetSpellCooldownDuration",id,ignoreGCD)
     if not object then return nil,nil,nil end
@@ -242,6 +258,12 @@ local function Availability(key,id,gcd,now)
         if gcdOnly or cd.active==false then facts.ownClear=true;facts.ownActive=false
         elseif cd.active==true then facts.ownClear=false;facts.ownActive=true end
     end
+    local estimate=estimatedEnds[key]
+    if (facts.ownClear and not facts.syncing) or (estimate and (estimate.id~=id or estimate.ends<=now)) then
+        estimatedEnds[key]=nil
+    elseif estimate and facts.ownActive and remaining==nil then
+        remaining=estimate.ends-now;facts.estimated=true
+    end
     facts.blocked=not ok or cd.enabled~=true or facts.syncing
     local previous=ns.usableHistory[key]
     if main and usable==true and oom==false and not facts.blocked then
@@ -258,7 +280,7 @@ local function Availability(key,id,gcd,now)
     if facts.ownClear then return true,0,oom,usable,true,facts end
     if cd.active~=true and facts.ownActive~=true then return nil,remaining,oom,usable,nil,facts end
     local gcdRemaining=gcd.remaining or Remaining(gcd,now)
-    local future=gcd.active==true and remaining and gcdRemaining and remaining<=gcdRemaining+0.001
+    local future=gcd.active==true and remaining and gcdRemaining and remaining<=gcdRemaining+0.001 and not facts.estimated and not gcd.estimated
     return gcdOnly or future or false,remaining,oom,usable,gcdOnly,facts
 end
 -- Burst reminders describe OWN cooldown readiness, not the next main action.
@@ -359,6 +381,7 @@ function ns.Succeeded(unit,guid,id)
     end
     if (key=="hawk" or key=="arcane") and ns.hawkState and ns.hawkState.lastSuccess
         and now>=ns.hawkState.lastSuccess and now-ns.hawkState.lastSuccess<.15 then return end
+    RecordShotTimer(key,id,now)
     local isBurst=ns.burstOption[key]~=nil
     for _,k in ipairs(ns.family[key] or {key}) do ns.cooldownCache[k]=nil;ns.fences[k]=now+(isBurst and 1 or 0.25) end
     if isBurst then ns.lastBurstAt=now
@@ -667,6 +690,11 @@ function ns.Snapshot()
         end
     end
     gcd.remaining=gcdTime or Remaining(gcd,now)
+    if gcd.active==false then estimatedGCD=nil end
+    if gcd.active==true and not gcd.remaining and estimatedGCD and estimatedGCD>now then
+        gcd.remaining=estimatedGCD-now;gcd.estimated=true
+    end
+    s.gcdEstimated=gcd.estimated
     s.gcd=gcd.active==true;s.gcdKnown=gcd.active~=nil;s.gcdStart=gcd.start;s.gcdRemaining=gcd.remaining;s.gcdDuration=gcdObject
     for key,id in pairs(ns.known) do
         local ready,remaining,oom,usable,burstReady,facts=Availability(key,id,gcd,now)
@@ -731,14 +759,14 @@ function ns.DrawMainCooldown(frame,key,s,out,preview)
             shown=pcall(frame.SetCooldownFromDurationObject,frame,object)
         end
     end
-    if not shown and out.wait and not preview and not out.castPreview and key=="arcane" then
+    if not shown and (out.wait or out.nativeOnly) and not preview and not out.castPreview then
         local object=SpellAPI("GetSpellCooldownDuration",ns.known[key],false)
         if object and frame.SetCooldownFromDurationObject then
             shown=pcall(frame.SetCooldownFromDurationObject,frame,object)
         end
     end
     if not shown then frame:Clear() end
-    frame:SetHideCountdownNumbers(not (ns.db.previewNumbers and shown and (out.wait or preview)))
+    frame:SetHideCountdownNumbers(not (ns.db.previewNumbers and shown and not remaining and (out.wait or out.nativeOnly)))
     return numeric
 end
 function ns.SavePosition(x,y)
@@ -787,6 +815,10 @@ function ns.Command(message)
         local s=ns.Snapshot();local count=0;for _ in pairs(ns.known) do count=count+1 end
         Say(ns.version.." / "..s.spec.." / "..s.mode.." / 已学技能组 "..count)
         Say(ns.TargetStatusText())
+        Say("强化追踪："..(not ns.db.trackingReminder and "提醒已关闭" or not s.target and "没有有效目标"
+            or s.trackingIcon and ("请开启 "..(SpellAPI("GetSpellName",trackingCache.spell) or "对应追踪"))
+            or not trackingCache.talented and "天赋未确认" or "当前无需提醒或追踪信息不可读")
+            .." / 位于主图标"..(ns.db.trackingSide=="left" and "左侧" or "右侧").."（屏幕边缘可换侧）")
         local nextAction=ns.Recommend(s,ns.Decide(s),ns.CopyRecommendationState())
         Say("下一技能："..(nextAction.key and nextAction.key~="auto" and ns.SpellName(nextAction.key) or "未确认")
             ..(nextAction.waitRemaining and (" / 等待 "..string.format("%.1f",nextAction.waitRemaining).." 秒")
@@ -847,6 +879,9 @@ local function Event(_,event,...)
         return
     end
     if not ns.db then return end
+    if event=="PLAYER_DEAD" or event=="PLAYER_ENTERING_WORLD" or event=="ACTIVE_TALENT_GROUP_CHANGED" then
+        estimatedEnds={};estimatedGCD=nil
+    end
     if trackingTalentEvents[event] or event=="PLAYER_TARGET_CHANGED" or event=="MINIMAP_UPDATE_TRACKING" then
         ns.InvalidateTracking(trackingTalentEvents[event])
     end

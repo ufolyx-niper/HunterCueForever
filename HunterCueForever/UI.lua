@@ -31,9 +31,18 @@ local function Render()
         if key~=displayedKey or id~=displayedID or preview~=wasPreview then
             icon:SetTexture(ns.SpellIcon(key));displayedKey=key;displayedID=id
         end
-        icon:SetDesaturated(not preview and (lastOutput.wait==true or lastOutput.settling==true))
-        local timed=ns.DrawMainCooldown(cd,key,lastState,lastOutput,preview)
-        ns.unknownClock:SetShown(visible and not preview and lastOutput.wait==true and not timed)
+        local seconds=preview and 2 or lastOutput.waitRemaining
+        icon:SetDesaturated(not preview and lastOutput.wait==true and type(seconds)=="number" and seconds>0)
+        ns.DrawMainCooldown(cd,key,lastState,lastOutput,preview)
+        local showDigits=(preview or lastOutput.wait) and ns.db.previewNumbers and type(seconds)=="number" and seconds>0
+        if showDigits then
+            ns.waitDigits:SetText((lastOutput.estimated and "~" or "")..math.ceil(seconds))
+            if ns.waitDigits.hcfSize~=ns.db.previewFontSize then
+                local path,_,flags=ns.waitDigits:GetFont()
+                if path then ns.waitDigits:SetFont(path,ns.db.previewFontSize,flags);ns.waitDigits.hcfSize=ns.db.previewFontSize end
+            end
+        end
+        ns.waitDigits:SetShown(showDigits==true)
         local font=cd.GetCountdownFontString and cd:GetCountdownFontString()
         if font and font.GetFont and font.SetFont and (font~=cd.hcfFontObject or cd.hcfFontSize~=ns.db.previewFontSize) then
             local path,_,flags=font:GetFont()
@@ -41,7 +50,7 @@ local function Render()
                 cd.hcfFontObject=font;cd.hcfFontSize=ns.db.previewFontSize
             end
         end
-    else ns.unknownClock:Hide();cd:Clear();displayedKey=nil;displayedID=nil end
+    else ns.waitDigits:Hide();cd:Clear();displayedKey=nil;displayedID=nil end
     local texture=preview and 132328 or lastState.trackingIcon
     if visible and ns.db.trackingReminder and texture then
         trackingIcon:SetTexture(texture);trackingIcon:Show()
@@ -141,13 +150,10 @@ function ns.CreateUI()
     overlay:SetAllPoints(mainButton)
     overlay:SetFrameLevel(cd:GetFrameLevel()+1)
     overlay:EnableMouse(false)
-    local badge=overlay:CreateTexture(nil,"OVERLAY")
-    badge:SetTexture(134400)
-    badge:SetVertexColor(1,.72,.25)
-    badge:SetSize(14,14)
-    badge:SetPoint("TOPRIGHT",mainButton,"TOPRIGHT",-1,-1)
-    badge:Hide()
-    ns.unknownClock=badge
+    local digits=overlay:CreateFontString(nil,"OVERLAY","GameFontNormalLarge")
+    digits:SetPoint("CENTER",mainButton,"CENTER")
+    digits:Hide()
+    ns.waitDigits=digits
     cd:SetDrawSwipe(true)
     cd.noCooldownCount=true;cd:SetHideCountdownNumbers(true);cd:SetDrawEdge(false);cd:SetDrawBling(false)
     group=CreateFrame("Frame","HunterCueForeverBurstGroup",UIParent);ns.burstGroup=group
@@ -186,7 +192,7 @@ function ns.ShowError()
     if ns.preview then Render();return end
     lastOutput={}
     if root then
-        root:Hide();group:Hide();mainButton:Hide();ns.unknownClock:Hide();cd:Clear()
+        root:Hide();group:Hide();mainButton:Hide();ns.waitDigits:Hide();cd:Clear()
         for key,b in pairs(buttons) do
             b:Hide();if ns.burstOption[key] then ns.SetGlow(b,false,b.visualSize or ns.db.burstSize) end
         end

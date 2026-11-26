@@ -48,7 +48,13 @@ function ns.PlanWait(s,raw)
     if ns.ChoiceValid(s,raw.key,false) or not s.target or s.casting or s.melee==true then return nil end
     if s.scanBlocked then return nil end
     if s.ranged~=true and not (s.spec=="mm" and s.spells.sniper and s.spells.sniper.range==true) then return nil,"射程未确认，暂停空档预告" end
-    if s.gcd and not s.gcdRemaining then return nil,"公共CD时间未知，无法比较未来技能" end
+    -- If the GCD horizon is opaque, evaluate only a conditional preparation
+    -- cue. Never manufacture a total action time from a spell-only timer.
+    local opaqueGCD=s.gcd and not s.gcdRemaining
+    if opaqueGCD then
+        local probe={};for k,v in pairs(s) do probe[k]=v end
+        probe.gcd=false;s=probe
+    end
     local times={};local candidates,unknown,unique=0,0,nil
     for _,key in ipairs(ns.futureKeys) do
         local p=s.spells[key]
@@ -57,15 +63,6 @@ function ns.PlanWait(s,raw)
             if p.remaining==nil then unknown=unknown+1
             elseif p.remaining>0 and p.remaining<=HORIZON then times[#times+1]=p.remaining end
         end
-    end
-    -- Unknown timers cannot be silently ranked behind known ones. Only one
-    -- unambiguous eligible candidate can be previewed without a numeric ETA.
-    if unknown>0 then
-        local p=unique and s.spells[unique]
-        if candidates==1 and p.ownActive==true then
-            return {key=unique,id=p.id,wait=true,unknown=true,waitSource=not s.gcd and "own" or nil}
-        end
-        return nil,"候选冷却先后未知，暂停空档预告"
     end
     table.sort(times)
     for _,time in ipairs(times) do
@@ -77,7 +74,20 @@ function ns.PlanWait(s,raw)
         local p=out.key and s.spells[out.key]
         if allowed and p and p.remaining and p.remaining>0 and ns.ChoiceValid(s,out.key,true) then
             return {key=out.key,id=p.id,reason="等待技能 · 保持自动射击",wait=true,remaining=horizon,
-                plannedAt=(s.now or 0)+horizon,move=raw.move or ""}
+                unknown=opaqueGCD or nil,tentative=unknown>0,plannedAt=(s.now or 0)+horizon,move=raw.move or ""}
+        end
+    end
+    if unknown>0 then
+        local probe=ns.FutureState(s,0)
+        for _,key in ipairs(ns.futureKeys) do
+            local p=probe.spells[key]
+            if p then p.ready=p.remaining==nil and p.ownActive==true and ns.ChoiceValid(s,key,true) end
+        end
+        local pick=ns.Decide(probe).key
+        local p=pick and probe.spells[pick]
+        if p and p.ownActive and p.ready then
+            return {key=pick,id=p.id,wait=true,unknown=true,tentative=true,
+                waitSource=not opaqueGCD and not s.gcd and "own" or nil}
         end
     end
     return nil,"10秒内无满足当前条件的预告技能"
@@ -248,13 +258,16 @@ function ns.Recommend(s,raw,memo)
     local p=out.key and s.spells[out.key]
     if p and out.key~="auto" then
         out.provisional=p.gcdPreview==true
-        if not out.castPreview and (s.gcd or s.gcdKnown==false) then
+        out.estimated=p.estimated or s.gcdEstimated or (s.gcdKnown==false and out.waitRemaining~=nil)
+        out.nativeOnly=s.gcdKnown==false and not out.wait
+        if not out.castPreview and s.gcd then
             out.wait=true
             if s.gcd and s.gcdRemaining and p.remaining then out.waitRemaining=math.max(out.waitRemaining or 0,s.gcdRemaining,p.remaining)
             else out.waitRemaining=nil end
             out.waitSource=out.waitRemaining==nil and s.gcd and (p.ownClear==true or p.remaining==0) and "gcd" or nil
         end
         if out.provisional then out.wait=true end
+        if out.estimated and out.waitRemaining then out.reason="依施放与基础冷却估算" end
     end
     return out
 end
